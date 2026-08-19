@@ -1,112 +1,131 @@
 CWD=$(shell pwd)
-PYVER ?= $(shell for p in python3 python2; do \
-	out=$$(command -v $$p 2>&1) && echo $$p && exit; done; exit 1)
-
-noseopts ?= -v
+VARIANT ?= ubuntu
 
 YAML_FILES=$(shell find cloudinit tests tools -name "*.yaml" -type f )
 YAML_FILES+=$(shell find doc/examples -name "cloud-config*.txt" -type f )
 
-PIP_INSTALL := pip install
+PYTHON ?= python3
 
-ifeq ($(PYVER),python3)
-  pyflakes = pyflakes3
-  unittests = unittest3
-  yaml = yaml
-else
-ifeq ($(PYVER),python2)
-  pyflakes = pyflakes
-  unittests = unittest
-else
-  pyflakes = pyflakes pyflakes3
-  unittests = unittest unittest3
-endif
-endif
+NUM_ITER ?= 100
 
-ifeq ($(distro),)
-  distro = redhat
-endif
+distro ?= redhat
 
-READ_VERSION=$(shell $(PYVER) $(CWD)/tools/read-version || \
-  echo read-version-failed)
-CODE_VERSION=$(shell $(PYVER) -c "from cloudinit import version; print(version.version_string())")
+READ_VERSION=$(shell $(PYTHON) $(CWD)/tools/read-version || echo read-version-failed)
+CODE_VERSION=$(shell $(PYTHON) -c "from cloudinit import version; print(version.version_string())")
+GENERATOR_F=./systemd/cloud-init-generator
+DS_IDENTIFY=./tools/ds-identify
+BENCHMARK=./tools/benchmark.sh
 
 
 all: check
 
-check: check_version test $(yaml)
+check: check_version test yaml
 
-style-check: pep8 $(pyflakes)
+style-check: lint
 
-pep8:
-	@$(CWD)/tools/run-pep8
-
-pyflakes:
-	@$(CWD)/tools/run-pyflakes
-
-pyflakes3:
-	@$(CWD)/tools/run-pyflakes3
+lint:
+	@$(CWD)/tools/run-lint
 
 unittest: clean_pyc
-	nosetests $(noseopts) tests/unittests cloudinit
+	$(PYTHON) -m pytest -v tests/unittests cloudinit
 
-unittest3: clean_pyc
-	nosetests3 $(noseopts) tests/unittests cloudinit
+render-template:
+	$(PYTHON) ./tools/render-template --variant=$(VARIANT) $(FILE) $(subst .tmpl,,$(FILE))
+
+# from systemd-generator(7) regarding generators:
+# "We do recommend C code however, since generators are executed
+# synchronously and hence delay the entire boot if they are slow."
+#
+# Our generator is a shell script. Make it easy to measure the
+# generator. This should be monitored for performance regressions
+benchmark-generator: FILE=$(GENERATOR_F).tmpl
+benchmark-generator: VARIANT="benchmark"
+benchmark-generator: export ITER=$(NUM_ITER)
+benchmark-generator: render-template
+	$(BENCHMARK) $(GENERATOR_F)
+
+benchmark-ds-identify: export ITER=$(NUM_ITER)
+benchmark-ds-identify:
+	$(BENCHMARK) $(DS_IDENTIFY)
 
 ci-deps-ubuntu:
-	@$(PYVER) $(CWD)/tools/read-dependencies --distro ubuntu --test-distro
+	@$(PYTHON) $(CWD)/tools/read-dependencies --distro ubuntu --test-distro
 
 ci-deps-centos:
-	@$(PYVER) $(CWD)/tools/read-dependencies --distro centos --test-distro
+	@$(PYTHON) $(CWD)/tools/read-dependencies --distro centos --test-distro
 
-pip-requirements:
-	@echo "Installing cloud-init dependencies..."
-	$(PIP_INSTALL) -r "$@.txt" -q
-
-pip-test-requirements:
-	@echo "Installing cloud-init test dependencies..."
-	$(PIP_INSTALL) -r "$@.txt" -q
-
-test: $(unittests)
+test: unittest
 
 check_version:
 	@if [ "$(READ_VERSION)" != "$(CODE_VERSION)" ]; then \
-	    echo "Error: read-version version '$(READ_VERSION)'" \
-	    "not equal to code version '$(CODE_VERSION)'"; exit 2; \
-	    else true; fi
+		echo "Error: read-version version '$(READ_VERSION)'" \
+			"not equal to code version '$(CODE_VERSION)'"; \
+		exit 2; \
+	else true; fi
 
 config/cloud.cfg:
-	$(PYVER) ./tools/render-cloudcfg config/cloud.cfg.tmpl config/cloud.cfg
+	$(PYTHON) ./tools/render-template --is-yaml config/cloud.cfg.tmpl config/cloud.cfg
 
 clean_pyc:
 	@find . -type f -name "*.pyc" -delete
+	@find . -type d -name __pycache__ -delete
 
-clean: clean_pyc
-	rm -rf /var/log/cloud-init.log /var/lib/cloud/
+clean_pytest:
+	rm -rf .cache htmlcov
+
+clean_packaging:
+	rm -rf srpm cloud_init.egg-info/ \
+		cloud-init-*.tar.gz \
+		cloud-init-*.tar.gz.asc \
+		cloud-init.dsc \
+		cloud-init_*.build \
+		cloud-init_*.buildinfo \
+		cloud-init_*.changes \
+		cloud-init_*.deb \
+		cloud-init_*.dsc \
+		cloud-init_*.orig.tar.gz \
+		cloud-init_*.tar.xz \
+		cloud-init_*.upload
+
+clean_release:
+	rm -rf new-upstream-changes.txt commit.msg
+
+clean: clean_pyc clean_pytest clean_packaging clean_release
+	rm -rf doc/rtd_html .tox .coverage tags $(GENERATOR_F)
 
 yaml:
-	@$(PYVER) $(CWD)/tools/validate-yaml.py $(YAML_FILES)
+	@$(PYTHON) $(CWD)/tools/validate-yaml.py $(YAML_FILES)
 
 rpm:
-	$(PYVER) ./packages/brpm --distro=$(distro)
+	$(PYTHON) ./packages/brpm --distro=$(distro)
 
 srpm:
-	$(PYVER) ./packages/brpm --srpm --distro=$(distro)
+	$(PYTHON) ./packages/brpm --srpm --distro=$(distro)
 
 deb:
 	@which debuild || \
 		{ echo "Missing devscripts dependency. Install with:"; \
-		  echo sudo apt-get install devscripts; exit 1; }
+			echo sudo apt-get install devscripts; exit 1; }
 
-	$(PYVER) ./packages/bddeb
+	$(PYTHON) ./packages/bddeb
 
 deb-src:
 	@which debuild || \
 		{ echo "Missing devscripts dependency. Install with:"; \
-		  echo sudo apt-get install devscripts; exit 1; }
-	$(PYVER) ./packages/bddeb -S -d
+			echo sudo apt-get install devscripts; exit 1; }
+	$(PYTHON) ./packages/bddeb -S -d
+
+doc:
+	tox -e doc
+
+fmt:
+	tox -e do_format && tox -e check_format
+
+fmt-tip:
+	tox -e do_format_tip && tox -e check_format_tip
 
 
-.PHONY: test pyflakes pyflakes3 clean pep8 rpm srpm deb deb-src yaml
-.PHONY: check_version pip-test-requirements pip-requirements clean_pyc
-.PHONY: unittest unittest3 style-check
+.PHONY: all check test lint clean rpm srpm deb deb-src yaml
+.PHONY: check_version clean_pyc
+.PHONY: unittest style-check render-template benchmark-generator
+.PHONY: clean_pytest clean_packaging clean_release doc

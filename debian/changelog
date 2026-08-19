@@ -1,431 +1,462 @@
-cloud-init (18.3-5vyatta9) unstable; urgency=medium
+cloud-init (25.1.4-1+deb13u1vyatta1) unstable; urgency=medium
 
-  [ Nicholas Brown ]
-  * Explicit python3 dependencies
+  * Rebase the DANOS integration onto Debian 13's cloud-init 25.1.4.
+    The 18.3 fork could not run at all on trixie: cloudinit/cmd/main.py
+    imports patcher, which imports the imp module Python 3.12 removed, so
+    every cloud deployment path was dead on arrival.
 
- -- Charles (Chas) Williams <ciwillia@vyatta.att-mail.com>  Mon, 08 Mar 2021 07:17:51 -0500
+  * Port the DANOS distro and config modules to the current module API:
+    - cloudinit.log became a package; use the standard logging module for
+      getLogger and cloudinit.log.log_util for logexc.
+    - handle() lost its log parameter in 24.x; log through a module-level LOG.
+    - config modules must declare meta: MetaSchema or they are not loaded.
+    - util.subp moved to the subp module.
+    - Drop the unused cloudinit.distros.net_util import, which upstream
+      removed along with the ENI rendering path.
 
-cloud-init (18.3-5vyatta8) unstable; urgency=medium
+  * Replace the apply_network/_write_network/_bring_up_interfaces overrides
+    with apply_network_config. All three were empty: configd is not running
+    during the init stage, so network configuration is deliberately deferred
+    to cc_apply_network_vyatta during the config stage. The new hook keeps
+    that behaviour.
 
-  [ Sameer Agrawal ]
-  * Update username as part of vyatta rebranding. VRVDR-51029
+  * Drop the _dist_uses_systemd override, which upstream no longer calls.
 
-  [ Charles (Chas) Williams ]
+  * Fix cfg["ssh_keys"].iteritems() in cc_ssh_vyatta, a Python 2 call that
+    would raise AttributeError as soon as ssh_keys appeared in the config.
 
- -- Charles (Chas) Williams <ciwillia@vyatta.att-mail.com>  Mon, 11 May 2020 11:29:45 -0400
+  * Rework the systemd integration for the 25.1 unit layout. cloud-init.service
+    is gone, split into cloud-init-main and cloud-init-network, and
+    cloud-config/cloud-final are static units that signal the long-running
+    main process over a unix socket rather than running cloud-init themselves.
+    Consequently the lu -user configd wrapper is dropped: it would only have
+    wrapped nc, while the modules actually run under cloud-init-main, whose
+    vrouter distro already sets /proc/self/loginuid itself when opening a
+    configd session.
 
-cloud-init (18.3-5vyatta7) unstable; urgency=medium
+ -- DANOS Package Maintainers <DANOS@att.com>  Mon, 18 Aug 2026 00:00:00 +0000
+cloud-init (25.1.4-1+deb13u1) trixie; urgency=medium
 
-  [ Nicholas Brown ]
-  * depend on python3-vyatta-cfgclient instead of python-vyatta-cfgclient
-    (Fixes: VRVDR-50671)
+  * Ensure deb822 sources.list template renders correctly (Closes: #1118187)
 
-  [ Charles (Chas) Williams ]
+ -- Noah Meyerhans <noahm@debian.org>  Mon, 10 Nov 2025 11:15:37 -0500
 
- -- Charles (Chas) Williams <ciwillia@vyatta.att-mail.com>  Thu, 16 Apr 2020 11:13:26 -0400
+cloud-init (25.1.4-1) unstable; urgency=medium
 
-cloud-init (18.3-5vyatta6) unstable; urgency=medium
+  * New upstream version 25.1.4 (Closes: #1108402, #1108403)
+    - Fixes CVE-2024-6174
+    - Fixes CVE-2024-11584
 
-  * Update copyrights (Bugfix: VRVDR-48979)
+ -- Noah Meyerhans <noahm@debian.org>  Mon, 07 Jul 2025 15:13:38 -0400
 
- -- Charles (Chas) Williams <ciwillia@vyatta.att-mail.com>  Fri, 22 Nov 2019 10:53:12 -0500
+cloud-init (25.1.1-1) unstable; urgency=medium
 
-cloud-init (18.3-5vyatta4) unstable; urgency=medium
+  * New upstream version 25.1.1
 
-  * Update copyrights
+ -- Noah Meyerhans <noahm@debian.org>  Mon, 24 Mar 2025 15:35:46 -0400
 
- -- Charles (Chas) Williams <ciwillia@mail.eng.vyatta.net>  Wed, 30 Oct 2019 11:07:43 -0400
+cloud-init (25.1-1) unstable; urgency=medium
 
-cloud-init (18.3-5vyatta3) unstable; urgency=medium
+  * New upstream version 25.1
+  * Rebase 0001-config-Support-APT-automated-mirror-selection.patch
 
-  [ James Wheatley ]
-  * Fix SSH config and host key generation
-  * Fix user and group normalization
-  * Fix SSH key splitting
-  * Fold SSH restart patch into ssh_vyatta patch
+ -- Noah Meyerhans <noahm@debian.org>  Sat, 22 Feb 2025 16:46:27 -0500
 
-  [ Charles (Chas) Williams ]
+cloud-init (24.4.1-2) unstable; urgency=medium
 
- -- Charles (Chas) Williams <ciwillia@mail.eng.vyatta.net>  Wed, 16 Oct 2019 06:16:56 -0400
+  * Add python3-passlib to Suggests (Closes: #1093885)
 
-cloud-init (18.3-5vyatta2) unstable; urgency=medium
+ -- Noah Meyerhans <noahm@debian.org>  Thu, 23 Jan 2025 16:36:16 -0500
 
-  * Cleanup old sources
+cloud-init (24.4.1-1) unstable; urgency=medium
 
- -- Charles (Chas) Williams <ciwillia@mail.eng.vyatta.net>  Wed, 14 Aug 2019 16:45:45 -0400
+  * New upstream version 24.4.1
+  * Switch build-deps from python3-pep to python3-pycodestyle (Closes: 1092997)
 
-cloud-init (18.3-5vyatta1) unstable; urgency=medium
+ -- Noah Meyerhans <noahm@debian.org>  Thu, 16 Jan 2025 12:24:22 -0500
 
-  [ Charles Plessy ]
-  * Application des modifications Debian (0.6.3-0ubuntu1) pour le tronc
-  * Removed files related to maintaining the package in bzr.
-  * Debian package based on Ubuntu's package.
-  * Machine-readable debian/copyright file; discarded extra information.
-  * Updated copyright file after inspecting the contents of cloud-init-0.6.3.tar.gz.
-  * Documented homepage and VCS URLs in debian/control.
-  * Remove ec2-init package and support for upgrade.
-  * Added a watch file to track the download link on the homepage.
-  * Changes to debian/control following instructions on the Debian wiki.
-  * Use Debhelper 9.
-  * Disable diversion of ureadahead, which is not packaged in Debian.
-  * Removed cloud-init.prerm as cloudinit-updates seems to have been removed earlier.
-  * Removed unused debian/dirs file.
+cloud-init (24.4-1) unstable; urgency=medium
 
-  [ Piotr Ożarowski ]
-  * fix capitalization in Description fields
+  * New upstream version 24.4
+  * Drop debian/patches/systemd-service-file-shutdown-problems.patch
 
-  [ Charles Plessy ]
-  * Removed grub-legacy-ec2, to be packaged elsewhere, see #672104.
-  * Priority optional as there is no conflict anymore.
-  * Extended cloud-init's description.
-  * Close ITP with the changelog.
-  * Revert diversion of ureadahead (r8607), track in LP: #997838.
-  * Restored debian/dirs as debian/cloud-init.dirs (commit 8609)
-  * Build directly in debian/cloud-init.
-  * Stop depending on po-debconf, which was for grub-legacy-ec2.
-  * cloud-init (0.6.3-1) experimental; urgency=low
-  * Initial empty ‘upstream’ branch for git-buildpackage.
-  * Imported Upstream version 0.6.3
-  * Do not depend on cloud-utils, which is only in Ubuntu.
-  * Correct status of version 0.6.3-1.
+ -- Noah Meyerhans <noahm@debian.org>  Wed, 04 Dec 2024 16:38:36 -0500
 
-  [ Miguel Landaeta ]
-  * * Remove unowned files in /etc/apt/apt.conf.d/ after purge. (Closes: #674237). * Fix versioned dependency on ifupdown, otherwise is uninstallable. * Fix Vcs-Svn URL. * Add myself as Uploader.
+cloud-init (24.3.1-2) unstable; urgency=medium
 
-  [ Julien Danjou ]
-  * Add myself as uploader, add python-boto as dependency
-  * Add fix-cfg-builtin.patch to set syslog_fix_perms to root:adm by default since we don't have any syslog user in Debian.
-  * Depends on Python >= 2.7, at least because subprocess needs check_output method.
+  * d/control: replace dhcpcd with dhcpcd-base in Depends (Closes: #1082897)
+
+ -- Noah Meyerhans <noahm@debian.org>  Wed, 02 Oct 2024 10:18:12 -0400
+
+cloud-init (24.3.1-1) unstable; urgency=medium
+
+  * New upstream version 24.3.1 (Closes: #1078180)
+  * Refresh patches
+  * Add no-op /etc/init.d/cloud-init-main to ensure corresponding init scripts
+    exist for each systemd unit
+  * Ensure cloud-init-main.service conflicts with shutdown.target
+  * Update lintian overrides for /lib/systemd -> /usr/lib/systemd change
+  * Refresh default cloud.cfg
+  * Fix python3 compatibility in postinst (Closes: #1055890)
+  * Prefer the dhcpcd DHCP client implementation (Closes: #1080999)
+  * Drop netdev from the default user's supplemental groups (Closes: #1055786)
+
+ -- Noah Meyerhans <noahm@debian.org>  Tue, 17 Sep 2024 12:18:42 -0400
+
+cloud-init (24.2-1) unstable; urgency=medium
+
+  * New upstream version 24.2
+  * Refresh patches
+
+ -- Noah Meyerhans <noahm@debian.org>  Wed, 03 Jul 2024 11:20:58 -0700
+
+cloud-init (24.1.7-3) unstable; urgency=medium
+
+  * Add Conflicts/Replaces relationship on cloud-init-22.4.2
+  * Build-Depend on pkgconf and systemd-dev | systemd (Closes: #1073747)
+
+ -- Noah Meyerhans <noahm@debian.org>  Tue, 18 Jun 2024 13:46:32 -0700
+
+cloud-init (24.1.7-2) unstable; urgency=medium
+
+  * Incorporate upstream fix for test failures in non-networked environments
+
+ -- Noah Meyerhans <noahm@debian.org>  Thu, 13 Jun 2024 14:00:02 -0700
+
+cloud-init (24.1.7-1) unstable; urgency=medium
+
+  * New upstream version 24.1.7
+
+ -- Noah Meyerhans <noahm@debian.org>  Mon, 10 Jun 2024 13:02:15 -0700
+
+cloud-init (24.1.6-1) unstable; urgency=medium
+
+  * New upstream version 24.1.6
+  * Revert "Disable broken upstream test", as the upstream issue is resolved
+
+ -- Noah Meyerhans <noahm@debian.org>  Fri, 24 May 2024 10:26:56 -0700
+
+cloud-init (24.1.4-2) unstable; urgency=medium
+
+  * Disable broken upstream test (Closes: #1069800)
+  * Remove obsolete python3-mock builddep (Closes: #1066802)
+  * Prefer udhcpc as the DHCP client for pre-network boot configuration
+    (Closes: #1051421)
+  * dh/rules: remove more artifacts during clean
+
+ -- Noah Meyerhans <noahm@debian.org>  Thu, 25 Apr 2024 11:37:10 -0700
+
+cloud-init (24.1.4-1) unstable; urgency=medium
+
+  * New upstream version 24.1.4
+
+ -- Noah Meyerhans <noahm@debian.org>  Wed, 24 Apr 2024 17:29:54 -0700
+
+cloud-init (24.1.3-1) unstable; urgency=medium
+
+  * New upstream version 24.1.3
+
+ -- Noah Meyerhans <noahm@debian.org>  Wed, 27 Mar 2024 09:47:28 -0700
+
+cloud-init (24.1.1-2) unstable; urgency=medium
+
+  * Add passwd to Build-Depends (Closes: #1057548)
+
+ -- Noah Meyerhans <noahm@debian.org>  Mon, 25 Mar 2024 14:12:56 -0700
+
+cloud-init (24.1.1-1) unstable; urgency=medium
+
+  [ Nick Brown ]
+  * Add logrotate config (Closes: #926424)
+
+  [ Debian Janitor ]
+  * Update lintian override info format in d/cloud-init.lintian-overrides
+    on line 3-7.
+  * Trim trailing whitespace.
+  * Use secure copyright file specification URI.
+  * Bump debhelper from old 10 to 13.
+    + Drop check for DEB_BUILD_OPTIONS containing "nocheck", since
+      debhelper now does this.
+    + Replace --no-restart-on-upgrade with --no-stop-on-upgrade.
+    + Use dh_installsystemd rather than deprecated dh_systemd_start.
+  * Set debhelper-compat version in Build-Depends.
+  * Set upstream metadata fields: Repository-Browse.
+  * Update standards version to 4.6.1, no changes needed.
+
+  [ Ross Vandegrift ]
+  * d/control: Conflict with firewalld (Closes: #1025618)
+    cloud-init and firewalld's systemd units jointly have startup cycles.
+    Currently, they cannot be eliminated without breaking features of one
+    or the other.
+  * d/control: drop obsolete Depends on lsb-base
+
+  [ Noah Meyerhans ]
+  * Fix debian/rules clean fails from git repo
+    This may not be strictly correct from a pybuild perspective, but it
+    avoids the need to call `setup.py` from the clean recipe.
+    (Closes: #955620)
+
+  [ Ross Vandegrift ]
+  * New upstream version 24.1
+  * d/p/0001-config-Support-APT-automated-mirror-selection.patch: refresh
+  * d/p/0006-Disable-two-failing-WSL-unittests.patch: disable failing WSL tests
+
+  [ Noah Meyerhans ]
+  * New upstream version 24.1.1
+  * Drop patch 0006-Disable-two-failing-WSL-unittests.patch
+
+ -- Noah Meyerhans <noahm@debian.org>  Mon, 11 Mar 2024 20:00:23 -0700
+
+cloud-init (23.3.1-1) unstable; urgency=medium
+
+  * New upstream version 23.3.1
+  * Refresh patches
+  * add python3-passlib to build-deps
+
+ -- Noah Meyerhans <noahm@debian.org>  Sun, 10 Sep 2023 19:33:52 -0700
+
+cloud-init (23.2.1-1) unstable; urgency=medium
+
+  * New upstream version 23.2.1
+
+ -- Noah Meyerhans <noahm@debian.org>  Wed, 28 Jun 2023 13:24:31 -0700
+
+cloud-init (23.2-1) unstable; urgency=medium
+
+  [ Jochen Sprickerhof ]
+  * Drop unused build dependencies (Closes: #1026813)
+
+  [ Noah Meyerhans ]
+  * New upstream version 23.2 (Closes: #1008039, #1005318, #999400)
+  * Refresh patches
+  * drop special handling of files that no longer exist upstream
+  * drop dependency on obsolete lsb-base package
+
+ -- Noah Meyerhans <noahm@debian.org>  Wed, 14 Jun 2023 09:42:18 -0700
+
+cloud-init (22.4.2-1) unstable; urgency=medium
+
+  [ Bastian Blank ]
+  * Remove unused integration into rsyslog.
+  * Remove unneeded config overrides.
+  * Update main config from template
+
+  [ Noah Meyerhans ]
+  * d/watch: ignore ubuntu internal releases
+  * New upstream version 22.4.2 (Closes: #1010555)
+  * Refresh patches
+
+ -- Noah Meyerhans <noahm@debian.org>  Tue, 13 Dec 2022 12:35:18 -0800
+
+cloud-init (22.2-3) unstable; urgency=medium
+
+  * Depend on eject for Azure data source.
+  * Support APT automated mirror selection.
+  * Update Debian default mirrors.
+
+ -- Bastian Blank <waldi@debian.org>  Mon, 05 Sep 2022 15:29:28 +0200
+
+cloud-init (22.2-2) unstable; urgency=high
+
+  * CVE-2022-2084: logged schema failures can include password hashes. Applied
+    upstream patch: Remove_schema_errors_from_log.patch (Closes: #1014247).
+
+ -- Thomas Goirand <zigo@debian.org>  Sun, 03 Jul 2022 19:03:53 +0200
+
+cloud-init (22.2-1) unstable; urgency=medium
+
+  [ Thomas Goirand ]
+  * Removed prettytable and six from build-depends (Closes: #1009279).
+
+  [ Noah Meyerhans ]
+  * debian/watch: point to github as the canonical source repository
+  * New upstream version 22.2
+  * d/control: Add python3-responses and python3-pytest-mock build-deps
+  * salsa-ci: allow reprotest to fail
+  * Refresh patches
+
+ -- Noah Meyerhans <noahm@debian.org>  Tue, 31 May 2022 12:44:24 -0700
+
+cloud-init (21.4-3) unstable; urgency=medium
+
+  * Fix VMware tests for ipv6-only.
+
+ -- Bastian Blank <waldi@debian.org>  Tue, 29 Mar 2022 13:36:09 +0200
+
+cloud-init (21.4-2) unstable; urgency=medium
+
+  * Remove ifupdown and net-tools depends.
+  * Require isc-dhcp-client as dhclient is used internally.
+
+ -- Bastian Blank <waldi@debian.org>  Mon, 28 Mar 2022 11:56:22 +0200
+
+cloud-init (21.4-1) unstable; urgency=medium
+
+  * New upstream version 21.4 (Closes: 910654)
+
+ -- Noah Meyerhans <noahm@debian.org>  Wed, 03 Nov 2021 10:44:32 -0700
+
+cloud-init (21.3-2) unstable; urgency=medium
+
+  * Refreshed debian/patches/cloud-init-before-chronyd.patch.
+  * Add patch: fix-sources-list-for-security-in-bullseye-and-above.patch
+    (Closes: #969934).
+
+ -- Thomas Goirand <zigo@debian.org>  Sun, 24 Oct 2021 23:28:46 +0200
+
+cloud-init (21.3-1) unstable; urgency=medium
+
+  * New upstream version 21.3
+  * Add python3-netifaces to build-deps
+  * Install upstream man pages
+
+ -- Noah Meyerhans <noahm@debian.org>  Thu, 26 Aug 2021 12:33:57 -0700
+
+cloud-init (21.2-1) unstable; urgency=medium
+
+  * New upstream version 21.2 (Closes: #991629, #979974)
+
+ -- Noah Meyerhans <noahm@debian.org>  Thu, 12 Aug 2021 09:16:27 -0700
+
+cloud-init (20.4.1-2) unstable; urgency=high
+
+  * Avoid logging generated passwords to world-readable log files.
+    CVE-2021-3429. (Closes: #985540)
+
+ -- Noah Meyerhans <noahm@debian.org>  Fri, 19 Mar 2021 09:18:59 -0700
+
+cloud-init (20.4.1-1) unstable; urgency=medium
+
+  * d/watch: switch upstream to github
+  * New upstream version 20.4.1
+
+ -- Noah Meyerhans <noahm@debian.org>  Tue, 19 Jan 2021 10:27:39 -0800
+
+cloud-init (20.4-1) unstable; urgency=medium
+
+  * New upstream version 20.4
+  * Clarifiy comments and spelling in default cloud.cfg (Closes: #971582)
+  * d/copyright: Clean up formatting
+  * Clean up lintian overrides
+  * Suppress lintian warning about Z99-cloud-locale-test.sh
+
+ -- Noah Meyerhans <noahm@debian.org>  Wed, 25 Nov 2020 19:29:14 -0800
+
+cloud-init (20.2-3) unstable; urgency=medium
+
+  * Ignore all of test_datasource/test_opennebula.py, as tests are failing
+    under Python 3.9, and I don't think anyone cares about opennebula anymore.
+    Anyone willing to fix is welcome to send a MR. (Closes: #973062)
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 28 Oct 2020 18:23:20 +0100
+
+cloud-init (20.2-2) unstable; urgency=medium
+
+  * Add missing Build-Dep on python3-pytest
+
+ -- Noah Meyerhans <noahm@debian.org>  Tue, 19 May 2020 17:27:07 -0700
+
+cloud-init (20.2-1) unstable; urgency=medium
+
+  * New upstream version
+  * Drop patches that have been merged upstream
+  * Switch to pytest for running tests, per upstream change
+
+ -- Noah Meyerhans <noahm@debian.org>  Tue, 19 May 2020 16:07:52 -0700
+
+cloud-init (20.1-2) unstable; urgency=medium
+
+  * Fix python 3.8 incompatibility (Closes: #954276)
+  * Cherry-pick fa1abfec2705 (ec2: only redact token request headers in
+    logs, avoid altering request) from upstream. (Closes: #954363)
+  * Cherry-pick 1f860e5ac7eb (ec2: Do not fallback to IMDSv1 on EC2) from
+    upstream.
+
+ -- Noah Meyerhans <noahm@debian.org>  Mon, 23 Mar 2020 09:02:27 -0700
+
+cloud-init (20.1-1) unstable; urgency=medium
+
+  * New upstream release
+  * Remove patches applied upstream:
+    - CVE-2020-8631.patch
+    - CVE-2020-8632.patch
+  * Refresh patches:
+    - 0009-Drop-all-unused-extended-version-handling.patch
+  * Reduce cloud-guest-utils from Depends to Recommends
+  * Bump standards version to 4.5.0 (no changes needed)
+  * Remove Charles Plessy <plessy@debian.org> from uploaders, as he is no
+    longer active in the cloud team.
+
+ -- Noah Meyerhans <noahm@debian.org>  Fri, 13 Mar 2020 14:26:55 -0700
+
+cloud-init (19.4-2) unstable; urgency=medium
+
+  * Import upstream fix for CVE-2020-8632.  rand_user_password generates
+    passwords of insufficient length.  (Closes: #951363)
+  * Import upstream fix for CVE-2020-8631.  Cloud-init uses an insufficient
+    source of randomness when generating passwords. (Closes: #951362)
+
+ -- Noah Meyerhans <noahm@debian.org>  Tue, 18 Feb 2020 14:17:28 -0800
+
+cloud-init (19.4-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Update debian/copyright to note dual-dual license status (Closes: #866613)
+
+ -- Noah Meyerhans <noahm@debian.org>  Fri, 14 Feb 2020 16:37:08 -0800
+
+cloud-init (19.3-2) unstable; urgency=medium
+
+  * Build-depends on python3-pep8 instead of just pep8 (Closes: #949940).
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 28 Jan 2020 13:11:23 +0100
+
+cloud-init (19.3-1) unstable; urgency=medium
+
   * New upstream release.
 
-  [ Charles Plessy ]
-  * Imported Upstream version 0.7.1
+ -- Thomas Goirand <zigo@debian.org>  Tue, 10 Dec 2019 08:36:53 +0100
 
-  [ Julien Danjou ]
-  * Add init scripts
-  * Update description (Closes: #695326)
-  * Release to unstable
-  * Enhance deps
-  * Fix description issue with line leading with dot
-  * Release to unstable
-  * Depends on python-prettytable
+cloud-init (19.2-4) unstable; urgency=medium
 
-  [ Jakub Wilk ]
-  * Use canonical URIs for Vcs-* fields.
+  * Removed the last bit of Python2 build-depends (Closes: #942968).
 
-  [ Charles Plessy ]
-  * Build-depend on python-setuptools and python-yaml. (Closes: #707443)
-  * Normalised debian/control with config-model-edit.
-  * New upstream release with new license and copyright statements.
-  * Imported Upstream version 0.7.2
-  * Patch from Thomas Goirand.
+ -- Thomas Goirand <zigo@debian.org>  Wed, 23 Oct 2019 12:19:08 +0200
 
-  [ Thomas Goirand ]
-  * Added X-Start-Before: sshd in debian/cloud-init.init
-  * Added a patch of the test suite to use /sbin/blkid and not just blkid.
-  * Adds internationalization of the debconf messages (eg: po folder, etc.).
-  * Adds a patch to disable a RHEL test (set hostname) which fails
-  * Added missing dependency: python-requests.
-  * Added myself as uploader.
+cloud-init (19.2-3) unstable; urgency=medium
 
-  [ Charles Plessy ]
-  * Added python-requests to build dependencies. (Closes: #711797)
-  * Sort Build-Depends to minimise diff with Ubuntu.
-  * Conforms with Policy 3.9.4.
-  * Depend on ${python:Depends}.
-  * Sort Depends to reduce diff with Ubuntu.
-  * Annotate debian/cloud-init.postrm to better understand diff with Ubuntu.
-  * Synchronise from Ubuntu's package 0.7.2-0ubuntu1.
-  * Added German translation.
-    Thanks to Chris Leick (Closes: #714738)
-  * Added Swedish translation.
-    Thanks to Martin Bagge (Closes: #714646)
-  * Added French translation.
-    Thanks to Julien Patriarca (Closes: #714608)
-  * Russian translation.
-    Thanks to Yuri Kozlov (Closes: #714093)
-  * Description and Debconf messages reviewed by the Smith project.
-    Thanks to Christian Perrier (Closes: #710444)
-  * Danish translation.
-    Thanks to Joe Dalton (Closes: #714785)
-  * Czech tranlsation.
-    Thanks to Michal Šimůnek (Closes: #714356)
-  * Translation update (Russian) (Closes: #715168)
-  * Portugese tranlsation.
-    Thanks to Américo Monteiro (Closes: #715241)
+  * Remove the patch for sources.list, and activate the option to preserve
+    the sources.list by default (ie: apt_preserve_sources_list: true).
 
-  [ Thomas Goirand ]
-  * Added missing init scripts cloud-init-local, cloud-init-final and cloud-config
+ -- Thomas Goirand <zigo@debian.org>  Wed, 16 Oct 2019 21:44:00 +0200
 
-  [ Charles Plessy ]
-  * Japanese translation.
-    Thanks to victory (Closes: #715500)
-  * Italian translation.
-    Thanks to Beatrice Torracca (Closes: #715390)
-  * Polish translation.
-    Thanks to Michał Kułach (Closes: #715799)
+cloud-init (19.2-2) unstable; urgency=medium
 
-  [ Thomas Goirand ]
-  * Removes references to /lib/init/vars.sh in init scripts since that will be gone (see lintian warning).
-  * Fixes the name of the cloud-init-local (it wasn't installed, breaking dpkg -i of cloud-init)
-  * Adding new init scripts (Closes: #709173)
-  * Reads the currently set value in /etc/cloud/cloud.cfg.d/90_dpkg.cfg to db_set the value of cloud-init/datasources (Closes: #709773).
-  * Check if upstart is init in all init scripts (Closes: #712985)
-  * Releasing, so edited debian/changelog.
-  * Adds debian/patches/adds-google-cloud-engine-source.patch and uploads to experimental
+  * Comment out backports by default in apt/sources.list.
+  * Standards-Version bump to 4.4.1.
 
-  [ Charles Plessy ]
-  * New upstream release, depending on python-jsonpatch and python-serial.
-  * Imported Upstream version 0.7.3
-  * Imported Upstream version 0.7.4
-  * Forwarded GCE patch and mention Google in debian/copyright.
-  * Forwarded the ‘blkid’ patch.
-  * Conforms to Policy 3.9.5.
-  * Consolidate changelog, treating Experimental as a separate branch.
-  * Correct installation path for rsyslog config snippet.
-    Thanks to Juerg Haefliger <juergh@gmail.com> (Closes: #707125)
-  * Build-Depend on iproute for the regression tests.
-  * cloud-init (0.7.4-1) unstable; urgency=medium
-  * Cancel upload, #707125 is not correctly solved.
-  * Imported Upstream version 0.7.5
-  * New upstream release; no new license terms; updated copyright holders.
-  * Refresh patch.
-  * Removed debian/patches/adds-google-cloud-engine-source.patch applied upstream.
-    (Closes: #725384)
-  * Consolidate the changelog.
-  * Added debian/gbp.conf, marking the use of git-buildpackage.
-  * Sorted python modules alphabetically to ease comparison with Ubuntu.
-  * Build-depend on python-httpretty for the regression tests.
-  * Source packages migrated to Git; updated VCS URLs.
-  * Removed Python Applications Packaging Team from the Maintainer field.
-  * cloud-init (0.7.5-1) unstable; urgency=medium
-  * Imported Upstream version 0.7.6~bzr976
-  * cloud-init (0.7.6~bzr976-1) unstable; urgency=medium
-  * Build-depend on iproute2 instead of iproute. (Closes: #753695)
-  * Portuguese translation for debconf messages update.
-    Thanks to Américo Monteiro <a_monteiro@gmx.com> (Closes: #748520)
-  * Updated German debconf translation.
-    Thanks to Chris Leick <c.leick@vollbio.de> (Closes: #750852)
-  * French debconf templates translation.
-    Thanks to Julien Patriarca <leatherface@debian.org> (Closes: #749773)
-  * cloud-init (0.7.6~bzr976-2) unstable; urgency=medium
-  * Imported Upstream version 0.7.6~bzr1022
+ -- Thomas Goirand <zigo@debian.org>  Wed, 16 Oct 2019 20:55:55 +0200
 
-  [ Thomas Goirand ]
-  * Added upstream debian/*.service files (Closes: #784083).
-  * Added [buildpackage] export-dir = ../build-area/ to gbp.conf
-  *   * Added cloud-init.cloud-config.target missing file.   * Removed explicit local-fs.target as services have use     DefaultDependencies=yes (which is the default). Thanks to Michael Biebl     <biebl@debian.org> for pointing it out.
+cloud-init (19.2-1) unstable; urgency=medium
 
-  [ Jan Blunck ]
-  * Fix changelog version
-  * Add python-jinja2 as build dependency
-  * Add dh-python build dependency
-  * Add systemd conditions to cloud-init units
-  * Explicitly choose init system
-  * Add Vyatta specific distribution class
+  * New upstream release. (Closes: #931173, #936030)
+  * Drop 0008-opennebula-also-exclude-epochseconds-from-changed-en.patch
+    applied upstream.
+  * Drop CVE-2019-0816_Filter_list_of_ssh_keys_pulled_from_fabric.patch also
+    applied upstream.
+  * Rebased patches:
+    - 0009-Drop-all-unused-extended-version-handling.patch
+    - 0012-Fix-message-when-a-local-is-missing.patch
 
-  [ Charles (Chas) Williams ]
-  * Changes to support adding users
-  * Disable cloud modules we don't yet support
-  * Use rsyslog.service as a dependency
-  * Remove package mirrors
-  * Fix unittest that depends on jinja2
-  * Lintian fixes
-  * Ensure init phase runs before configd
-  * Update to users and groups configuration
-  * cloud-init: use vcli to handle user scripts
-  * Update to users and groups configuration
-  * Add ssh-vyatta module to import ssh keys
-  * cloud-init: resizefs support for cloud images
-  * Configure network based on local datasource
+ -- Thomas Goirand <zigo@debian.org>  Thu, 29 Aug 2019 08:47:15 +0200
 
-  [ Deepti Kulkarni ]
-  * Fix python api
-  * Changing the distro name
-  * python api fix
+cloud-init (18.3-6) unstable; urgency=high
 
-  [ Thomas Goirand ]
-  *   * Fixed .service dependency on ssh and not sshd.   * Switched from Type=oneshot to Type=simple so that other services don't     keep on waiting for it forever.   * cloud-config.service doesn't depend on itself anymore, and now has:     Requires=cloud-init.service, After=cloud-init.service
+  * CVE-2019-0816: Extraneous SSH Public Keys added to Authorized Keys file.
+    Applied a refreshed patch from upstream: azure: Filter list of ssh keys
+    pulled from fabric (Closes: #926043).
 
-  [ Charles (Chas) Williams ]
-  * cloud-init: resizefs support for cloud images
-  * Don't recreate users
-
-  [ Eugene Tan ]
-  * 0.7.6~bzr1022-0vyatta1
-
-  [ Charles (Chas) Williams ]
-  * Import ssh keys for users
-
-  [ Eugene Tan ]
-  * 0.7.6~bzr1022-0vyatta2
-
-  [ Charles (Chas) Williams ]
-  * Set/update the hostname from data sources
-  * Disable rsyslog module
-
-  [ Charles Plessy ]
-  * Imported Upstream version 0.7.6
-  * Imported Upstream version 0.7.7~bzr1091
-  * Imported Upstream version 0.7.7~bzr1149
-  * Imported Upstream version 0.7.7~bzr1156
-  * New usptream release and bzr snapshot; copyright updates.
-  * Close request for new release. (Closes: #804782)
-  * Import some of the changes from ../config/cloud.cfg.
-  * Add security mirror.
-    Thanks to Brandon Bradley <bradleytastic@gmail.com> (Closes: #783847)
-  * Changelog entries; mention that the update closes feature request.
-  * Added missing debian revision number.
-  * Import changes from the Ubuntu package, mostly related to systemd and python3.
-  * Use upstream systemd units.
-  * Ensure that 'nofail' is used instead of 'nobootwait'. (Closes: #789884)
-  * Found bug duplicate. (Closes: #702382)
-
-  [ Eugene Tan ]
-  * 0.7.6~bzr1022-0vyatta3
-
-  [ Bastian Blank ]
-  * Make Azure datasource run without root
-  * Properly support systemd
-  * Don't install upstart by hand
-  * Use upstream init scripts
-  * Use pybuild as build system
-  * Don't hardcode python dependencies
-  * Fix build dependencies
-  * Depend on lsb-release
-  * Update default cloud.cfg
-  * Add myself as uploader
-  * Release 0.7.7~bzr1156-1
-
-  [ Charles Plessy ]
-  * Jessie backport.
-
-  [ Charles (Chas) Williams ]
-  * Disable bootcmd in cloud.cfg
-  * Run cloud-init final stage after system configure
-
-  [ Bastian Blank ]
-  * Imported Upstream version 0.7.7~bzr1215
-
-  [ Charles (Chas) Williams ]
-  * Update dependency for upstream changes
-
-  [ Jan Blunck ]
-  * Add ConditionKernelCommandline to cloud-config/cloud-final
-  * Change loginuid before creating configd session
-  * Fix delete of existing value
-  * Don't fail if metadata doesn't include 'network-interfaces'
-  * Fix SyntaxError: invalid token
-  * Fix TabError
-  * Fix lintian init.d-script-missing-dependency-on-remote_fs
-  * 0.7.7~bzr1156-1vyatta1
-  * Let cloud-config.service run after config-loaded.target
-  * Start cloud-init.service before vyatta-dataplane.service
-  * Fix lock-passwd to prevent passwd based login
-
-  [ Charles (Chas) Williams ]
-  * Run config and final stages with lu
-
-  [ Deepti Kulkarni ]
-  * Add vyatta module for ssh - ssh_vyatta
-
-  [ Daniel Gollub ]
-  * Applying SSH credentails requires ascii decode
-  * Disable CloudStack and other unsupported platforms
-
-  [ Glenn Serre ]
-  * fix ssh-authorized-keys setting from user-data
-
-  [ Charles (Chas) Williams ]
-  * Build fixes for Debian 9
-  * 0.7.7~bzr1156-1vyatta2
-  * Depend on cloud-guest-utils
-  * 0.7.7~bzr1156-1vyatta3
-
-  [ Jan Blunck ]
-  * Fix changelog version
-  * Explicitly choose init system
-  * Add Vyatta specific distribution class
-
-  [ Charles (Chas) Williams ]
-  * Changes to support adding users
-  * Disable cloud modules we don't yet support
-  * Remove package mirrors
-  * Fix unittest that depends on jinja2
-  * Lintian fixes
-  * Update to users and groups configuration
-  * cloud-init: use vcli to handle user scripts
-  * Update to users and groups configuration
-  * Add ssh-vyatta module to import ssh keys
-  * cloud-init: resizefs support for cloud images
-  * Configure network based on local datasource
-
-  [ Deepti Kulkarni ]
-  * Fix python api
-  * Changing the distro name
-  * python api fix
-
-  [ Charles (Chas) Williams ]
-  * cloud-init: resizefs support for cloud images
-  * Don't recreate users
-
-  [ Eugene Tan ]
-  * 0.7.6~bzr1022-0vyatta1
-
-  [ Charles (Chas) Williams ]
-  * Import ssh keys for users
-
-  [ Eugene Tan ]
-  * 0.7.6~bzr1022-0vyatta2
-
-  [ Charles (Chas) Williams ]
-  * Set/update the hostname from data sources
-  * Disable rsyslog module
-
-  [ Eugene Tan ]
-  * 0.7.6~bzr1022-0vyatta3
-
-  [ Charles (Chas) Williams ]
-  * Disable bootcmd in cloud.cfg
-  * Update dependency for upstream changes
-
-  [ Jan Blunck ]
-  * Change loginuid before creating configd session
-  * Fix delete of existing value
-  * Don't fail if metadata doesn't include 'network-interfaces'
-  * Fix SyntaxError: invalid token
-  * Fix TabError
-  * Fix lintian init.d-script-missing-dependency-on-remote_fs
-  * 0.7.7~bzr1156-1vyatta1
-  * Fix lock-passwd to prevent passwd based login
-
-  [ Deepti Kulkarni ]
-  * Add vyatta module for ssh - ssh_vyatta
-
-  [ Daniel Gollub ]
-  * Applying SSH credentails requires ascii decode
-
-  [ Glenn Serre ]
-  * fix ssh-authorized-keys setting from user-data
-
-  [ Charles (Chas) Williams ]
-  * Build fixes for Debian 9
-  * 0.7.7~bzr1156-1vyatta2
-  * 0.7.7~bzr1156-1vyatta3
-
-  [ James Wheatley ]
-  * Update patches after cloud-init Update
-  * Port additional commits to new version
-  * Merge patches
-  * Relax version restriction on python3-httpretty
-  * Fix build issues
-  * Add Azure endpoint fallback
-  * Restart SSH service after creating host keys
-
-  [ Charles (Chas) Williams ]
-  * Cleanup after switching repository histories
-
- -- Charles (Chas) Williams <ciwillia@mail.eng.vyatta.net>  Wed, 14 Aug 2019 16:22:44 -0400
+ -- Thomas Goirand <zigo@debian.org>  Thu, 25 Apr 2019 08:54:18 +0200
 
 cloud-init (18.3-5) unstable; urgency=medium
 
@@ -629,58 +660,6 @@ cloud-init (0.7.7~bzr1156-2) unstable; urgency=medium
 
  -- Bastian Blank <bastian.blank@credativ.de>  Wed, 24 Feb 2016 17:38:38 +0100
 
-cloud-init (0.7.7~bzr1156-1vyatta3) unstable; urgency=medium
-
-  * Depend on cloud-guest-utils
-
- -- Charles (Chas) Williams <ciwillia@brocade.com>  Mon, 23 Jan 2017 14:36:11 -0500
-
-cloud-init (0.7.7~bzr1156-1vyatta2) unstable; urgency=medium
-
-  [ Jan Blunck ]
-  * Let cloud-config.service run after config-loaded.target
-  * Start cloud-init.service before vyatta-dataplane.service
-  * Fix lock-passwd to prevent passwd based login
-
-  [ Charles (Chas) Williams ]
-  * Run config and final stages with lu
-
-  [ Deepti Kulkarni ]
-  * Add vyatta module for ssh - ssh_vyatta
-
-  [ Daniel Gollub ]
-  * Applying SSH credentails requires ascii decode
-  * Disable CloudStack and other unsupported platforms
-
-  [ Glenn Serre ]
-  * fix ssh-authorized-keys setting from user-data
-
-  [ Charles (Chas) Williams ]
-  * Build fixes for Debian 9
-
- -- Charles (Chas) Williams <ciwillia@brocade.com>  Thu, 12 Jan 2017 18:05:24 -0500
-
-cloud-init (0.7.7~bzr1156-1vyatta1) unstable; urgency=medium
-
-  [ Charles (Chas) Williams ]
-  * Set/update the hostname from data sources
-  * Disable rsyslog module
-  * Disable bootcmd in cloud.cfg
-  * Run cloud-init final stage after system configure
-  * Update dependency for upstream changes
-
-  [ Jan Blunck ]
-  * Add ConditionKernelCommandline to cloud-config/cloud-final
-  * Change loginuid before creating configd session
-  * Fix delete of existing value
-  * Don't fail if metadata doesn't include 'network-interfaces'
-  * Merge tag 'debian/0.7.7_bzr1156-1_bpo8+1' into update_0.7.7
-  * Fix SyntaxError: invalid token
-  * Fix TabError
-  * Fix lintian init.d-script-missing-dependency-on-remote_fs
-
- -- Jan Blunck <jblunck@brocade.com>  Thu, 26 May 2016 21:40:45 +0200
-
 cloud-init (0.7.7~bzr1156-1) unstable; urgency=medium
 
   [ Charles Plessy ]
@@ -704,59 +683,6 @@ cloud-init (0.7.7~bzr1156-1) unstable; urgency=medium
   * Add myself as uploader.
 
  -- Bastian Blank <waldi@debian.org>  Fri, 29 Jan 2016 14:28:01 +0100
-
-cloud-init (0.7.6~bzr1022-0vyatta3) unstable; urgency=medium
-
-  [ Charles (Chas) Williams ]
-  * cloud-init: resizefs support for cloud images
-
-  [ Eugene Tan ]
-
- -- Eugene Tan <tane@brocade.com>  Mon, 07 Dec 2015 15:13:08 -0800
-
-cloud-init (0.7.6~bzr1022-0vyatta2) unstable; urgency=medium
-
-  [ Charles (Chas) Williams ]
-  * Don't recreate users
-  * Import ssh keys for users
-
-  [ Eugene Tan ]
-
- -- Eugene Tan <tane@brocade.com>  Mon, 19 Oct 2015 11:50:23 -0700
-
-cloud-init (0.7.6~bzr1022-0vyatta1) trusty; urgency=low
-
-  [ Jan Blunck ]
-  * Fix changelog version
-  * Add python-jinja2 as build dependency
-  * Add dh-python build dependency
-  * Add systemd conditions to cloud-init units
-  * Explicitly choose init system
-  * Add Vyatta specific distribution class
-
-  [ Charles (Chas) Williams ]
-  * Changes to support adding users
-  * Disable cloud modules we don't yet support
-  * Use rsyslog.service as a dependency
-  * Remove package mirrors
-  * Fix unittest that depends on jinja2
-  * Lintian fixes
-  * Ensure init phase runs before configd
-  * Update to users and groups configuration
-  * cloud-init: use vcli to handle user scripts
-  * Update to users and groups configuration
-  * Add ssh-vyatta module to import ssh keys
-  * cloud-init: resizefs support for cloud images
-  * Configure network based on local datasource
-
-  [ Deepti Kulkarni ]
-  * Fix python api
-  * Changing the distro name
-  * python api fix
-
-  [ Eugene Tan ]
-
- -- Eugene Tan <tane@brocade.com>  Thu, 15 Oct 2015 14:02:19 -0700
 
 cloud-init (0.7.6~bzr976-5) unstable; urgency=medium
 
@@ -785,7 +711,7 @@ cloud-init (0.7.6~bzr976-3) unstable; urgency=medium
 
 cloud-init (0.7.6~bzr976-2) unstable; urgency=medium
 
-  * Build-depend on iproute2 instead of iproute (Closes: #753695). 
+  * Build-depend on iproute2 instead of iproute (Closes: #753695).
   * Translation updates:
     - Portuguese: Américo Monteiro <a_monteiro@gmx.com>, closes: #748520.
     - German: Chris Leick <c.leick@vollbio.de>,          closes: #750852.
@@ -820,14 +746,14 @@ cloud-init (0.7.5-1) unstable; urgency=medium
 cloud-init (0.7.2-3) unstable; urgency=low
 
   [ Charles Plessy ]
-  * Added python-requests to build dependencies (Closes: #711797). 
+  * Added python-requests to build dependencies (Closes: #711797).
   * Conforms with Policy 3.9.4.
   * Depend on ${python:Depends}.
   * Description and Debconf messages reviewed by the Smith project.
     Closes: #710444, thanks to Justin B Rye and Christian Perrier.
   * German translation (Closes: #714738, thanks to Chris Leick).
   * Swedish translation (Closes: #714646, thanks to Martin Bagge).
-  * French translation (Closes: #714608, thanks to Julien Patriarca). 
+  * French translation (Closes: #714608, thanks to Julien Patriarca).
   * Russian translation (Closes: #714093, #715168, thanks to Yuri Kozlov).
   * Danish translation (Closes: #714785, thanks to Joe Dalton).
   * Czech tranlsation (Closes: #714356, thanks to Michal Šimůnek).
@@ -914,7 +840,7 @@ cloud-init (0.7.1-1) unstable; urgency=low
 cloud-init (0.6.3-2) experimental; urgency=low
 
   * First version in Debian (Closes: #672375).
-  * Do not depend on cloud-utils, which is only in Ubuntu. 
+  * Do not depend on cloud-utils, which is only in Ubuntu.
 
  -- Charles Plessy <plessy@debian.org>  Wed, 23 May 2012 09:26:29 +0900
 
@@ -929,7 +855,7 @@ cloud-init (0.6.3-1) experimental; urgency=low
     - Removed debian/pycompat.
     - Build-depend on CDBS >= 0.4.90~.
     - Removed XS-Python-Version and XB-Python-Version in debian/control.
-  * Use Debhelper 9 (debian/control, debian/compat). 
+  * Use Debhelper 9 (debian/control, debian/compat).
   * Removed debian/cloud-init.prerm as /etc/cron.d/cloudinit-updates
     seems to have been removed from the package earlier.
   * Removed unneeded debian/dirs debian/cloud-init.install.
@@ -981,7 +907,7 @@ cloud-init (0.6.3~bzr547-0ubuntu1) precise; urgency=low
   * New upstream snapshot.
     * rename DataSourceMaaS to DataSourceMAAS.
     * support public-keys in DataSourceMAAS
-    * Warn in user-data processing on non-multipart, non-handled data 
+    * Warn in user-data processing on non-multipart, non-handled data
     * CloudStack data source added (not enabled by default)
   * fix bug in cloud-init.postinst where the name used was wrong
     causing config-apt-pipelining to run more than intended
@@ -1012,7 +938,7 @@ cloud-init (0.6.3~bzr539-0ubuntu1) precise; urgency=low
     * run-parts now uses internal implementation rather than
       separate command.
     * add MaaS datasource (LP: #942061)
-  * debian/cloud-init.postinst: address population of apt_pipeline 
+  * debian/cloud-init.postinst: address population of apt_pipeline
     setting on installation.
   * debian/cloud-init.postinst: support configuring cloud-init
     maas datasource via preseed values cloud-init/maas-metadata-url and
@@ -1160,7 +1086,7 @@ cloud-init (0.6.1-0ubuntu14) oneiric; urgency=low
   * change the handling of user-data (LP: #810044)
    * boothooks will now run more than once as they were intended
    * cloud-config and user-scripts will be updated from user data every boot
-  * Add a second type of part-handler that will be called on every boot 
+  * Add a second type of part-handler that will be called on every boot
   * fix bad handling of /etc/hosts if manage_etc_hosts was false
 
  -- Scott Moser <smoser@ubuntu.com>  Mon, 08 Aug 2011 12:46:56 -0500
@@ -1188,7 +1114,7 @@ cloud-init (0.6.1-0ubuntu12) oneiric; urgency=low
   [Adam Gandalman]
   * improve the updating of /etc/hosts with correct fqdn when possible
     (LP: #812539)
-   
+
   [Avishai Ish-Shalom]
   * add chef support (cloudinit/CloudConfig/cc_chef.py) (LP: #798844)
 
@@ -1305,7 +1231,7 @@ cloud-init (0.6.1-0ubuntu1) natty; urgency=low
 
 cloud-init (0.6.0-0ubuntu4) natty; urgency=low
 
-  * fix running of user scripts (LP: #711480) (cherry pick 344) 
+  * fix running of user scripts (LP: #711480) (cherry pick 344)
   * fix 2 lintian warnings
 
  -- Scott Moser <smoser@ubuntu.com>  Tue, 01 Feb 2011 16:15:30 -0500
@@ -1348,7 +1274,7 @@ cloud-init (0.6.0-0ubuntu1) natty; urgency=low
   * indicate "all the way up" with message to console and file creation
     in /var/lib/cloud/instance/ (LP: #653271)
   * write ssh keys to console late in boot to ensure they're in console buffer
-  * add support for redirecting output of cloud-init, cloud-config, 
+  * add support for redirecting output of cloud-init, cloud-config,
     cloud-final via the config file, or user data config file
   * add support for posting data about the instance to a url (phone_home)
   * add minimal OVF transport (iso) support
@@ -1360,7 +1286,7 @@ cloud-init (0.6.0-0ubuntu1) natty; urgency=low
     (LP: #641504)
   * add support for reading Rightscale style user data (LP: #668400)
   * make the message on 'disable_root' more clear (LP: #672417)
-  * do not require public key if private is given in ssh cloud-config 
+  * do not require public key if private is given in ssh cloud-config
     (LP: #648905)
 
  -- Scott Moser <smoser@ubuntu.com>  Wed, 26 Jan 2011 17:28:36 -0500
@@ -1463,7 +1389,7 @@ cloud-init (0.5.12-0ubuntu8) maverick; urgency=low
 
 cloud-init (0.5.12-0ubuntu7) maverick; urgency=low
 
-  * update-grub-legacy-ec2:                                                     
+  * update-grub-legacy-ec2:
     - force setting of indomU so output of build process has
       a menu.lst with -ec2 kernels listed.
     - remove 'quite splash' from kernel options
@@ -1474,7 +1400,7 @@ cloud-init (0.5.12-0ubuntu7) maverick; urgency=low
 cloud-init (0.5.12-0ubuntu6) maverick; urgency=low
 
   * fix installation error
-  * add quilt-setup rule for package development 
+  * add quilt-setup rule for package development
 
  -- Scott Moser <smoser@ubuntu.com>  Tue, 13 Jul 2010 12:04:21 -0400
 
@@ -1510,7 +1436,7 @@ cloud-init (0.5.12-0ubuntu1) maverick; urgency=low
 
   * New upstream release.
   * fix cloud-init-run-module to allow 'always' (LP: #568139)
-  * add support for setting debconf selections 
+  * add support for setting debconf selections
   * add cloud-config support for debconf selections (LP: #582667),
     byobu enablement, and ssh-import-lp-id
 
@@ -1700,7 +1626,7 @@ ec2-init (0.4.999-0ubuntu5) karmic; urgency=low
 
 ec2-init (0.4.999-0ubuntu4) karmic; urgency=low
 
-  * set locale to en_US.UTF-8 if get_location_from_availability_zone 
+  * set locale to en_US.UTF-8 if get_location_from_availability_zone
     doesn't have a match (LP: #407949)
 
  -- Scott Moser <smoser@ubuntu.com>  Tue, 20 Oct 2009 09:57:49 -0400
@@ -1784,9 +1710,9 @@ ec2-init (0.3.4ubuntu6) karmic; urgency=low
 
 ec2-init (0.3.4ubuntu5) karmic; urgency=low
 
-  * debian/init: Move instance reboot detection out of python 
+  * debian/init: Move instance reboot detection out of python
     scripts and move them to the init script.
-  * debian/ec2-set-defaults.py: 
+  * debian/ec2-set-defaults.py:
     - Point to the right location for locate (LP: #387611)
     - Default to UTC (LP: #341060)
   * debian/ec2-set-apt-sources.py: If you cant contact EC2 then use the
@@ -1809,7 +1735,7 @@ ec2-init (0.3.4ubuntu3) karmic; urgency=low
 
   * debian/init: Move init script to run before ssh and regenerate the ssh
     host kes in the init script rather than /etc/rc.local (LP: #370628)
-  * ec2-set-apt-sources.py: 
+  * ec2-set-apt-sources.py:
     - Move sources.list to /var/ec2 so it doesnt get removed after user
     reboots.
   * ec2-set-defaults.py:
@@ -1821,7 +1747,7 @@ ec2-init (0.3.4ubuntu3) karmic; urgency=low
 
 ec2-init (0.3.4ubuntu2) karmic; urgency=low
 
-  * Really change the locale when setting up an instance. (LP: #341066) 
+  * Really change the locale when setting up an instance. (LP: #341066)
   * Run ec2-run-user-data script last. (LP: #373055)
   * Minor comment tweaks. (LP: #373057)
 
@@ -1835,7 +1761,7 @@ ec2-init (0.3.4ubuntu1) karmic; urgency=low
 
 ec2-init (0.3.3ubuntu12) jaunty; urgency=low
 
-  * ec2-run-user-data.py: Fix error. 
+  * ec2-run-user-data.py: Fix error.
 
  -- Chuck Short <zulcss@ubuntu.com>  Tue, 07 Apr 2009 08:14:07 -0400
 
@@ -1856,27 +1782,27 @@ ec2-init (0.3.3ubuntu10) jaunty; urgency=low
 
   * ec2-set-hostname.py:
     - Use template for /etc/hosts creation.
-    - Dont use public_hostname in /etc/hosts. (LP: #352745) 
+    - Dont use public_hostname in /etc/hosts. (LP: #352745)
 
  -- Chuck Short <zulcss@ubuntu.com>  Wed, 01 Apr 2009 08:48:05 -0400
 
 ec2-init (0.3.3ubuntu9) jaunty; urgency=low
 
   * ec2-set-apt-sources.py:
-    - Use a template to generate the sources.list and generate it based on the lsb_release. 
+    - Use a template to generate the sources.list and generate it based on the lsb_release.
 
  -- Chuck Short <zulcss@ubuntu.com>  Tue, 31 Mar 2009 15:15:55 -0400
 
 ec2-init (0.3.3ubuntu8) jaunty; urgency=low
 
   * ec2-set-apt-sources.py:
-    - Add the ubuntu-on-ec2 ppa. 
+    - Add the ubuntu-on-ec2 ppa.
 
  -- Chuck Short <zulcss@ubuntu.com>  Tue, 31 Mar 2009 09:37:13 -0400
 
 ec2-init (0.3.3ubuntu7) jaunty; urgency=low
 
-  * debian/rules: Fix typo. 
+  * debian/rules: Fix typo.
 
  -- Chuck Short <zulcss@ubuntu.com>  Sun, 22 Mar 2009 17:14:16 -0400
 
@@ -1884,7 +1810,7 @@ ec2-init (0.3.3ubuntu6) jaunty; urgency=low
 
   * Set the configuration file to jaunty.
   * ec2-fetch-credentials: Fix typo.
-  * ec2-set-defaults.py: 
+  * ec2-set-defaults.py:
     - Remove timezone change when booting the instance.
     - Redirect output to /dev/null.
   * ec2-set-apt-sources.py:
@@ -1928,8 +1854,8 @@ ec2-init (0.3.3ubuntu3~intrepid4) intrepid; urgency=low
 ec2-init (0.3.3ubuntu3) jaunty; urgency=low
 
   * debian/ec2-init: Log results of ec2-run-user-data to syslog.
-  * ec2-run-user-data.py :Dont leave files around and log the 
-    output to syslog. 
+  * ec2-run-user-data.py :Dont leave files around and log the
+    output to syslog.
 
  -- Chuck Short <zulcss@ubuntu.com>  Thu, 26 Feb 2009 10:24:35 -0500
 
@@ -1945,7 +1871,7 @@ ec2-init (0.3.3ubuntu2) jaunty; urgency=low
 
 ec2-init (0.3.3ubuntu1) jaunty; urgency=low
 
-  * debian/init: Fix init script. 
+  * debian/init: Fix init script.
 
  -- Chuck Short <zulcss@ubuntu.com>  Fri, 20 Feb 2009 09:22:54 -0500
 
@@ -1964,7 +1890,7 @@ ec2-init (0.3.3) jaunty; urgency=low
     - Add python-configobj as a dependency.
   * debian/{install,dirs}
     - Create an /etc/ec2-init to read the configuration file and install it.
-  
+
  -- Chuck Short <zulcss@ubuntu.com>  Mon, 09 Feb 2009 10:35:56 -0500
 
 ec2-init (0.3.2) jaunty; urgency=low
@@ -1978,7 +1904,7 @@ ec2-init (0.3.2) jaunty; urgency=low
       public hostname.
   * ec2-fetch-credentials:
     - Copy the ssh keys to the ubuntu user.
-    - Setup authorized keys for root to tell the user to login as the 
+    - Setup authorized keys for root to tell the user to login as the
       ubuntu user when they try to connect.
   * ec2-run-user-data:
     - Create an .already-ran file to check to see if ec2-run-user-data
@@ -1997,7 +1923,7 @@ ec2-init (0.3.1) jaunty; urgency=low
 
 ec2-init (0.3) jaunty; urgency=low
 
-  * ec2-run-user-data: Fix python error when writing a file to the disk. 
+  * ec2-run-user-data: Fix python error when writing a file to the disk.
 
  -- Chuck Short <zulcss@ubuntu.com>  Thu, 15 Jan 2009 11:49:08 -0500
 
@@ -2015,4 +1941,3 @@ ec2-init (0.1) intrepid; urgency=low
   * Initial release (LP: #269434).
 
  -- Soren Hansen <soren@ubuntu.com>  Fri, 12 Sep 2008 15:30:32 +0200
-

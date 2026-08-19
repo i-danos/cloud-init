@@ -12,47 +12,62 @@
 CFG_ENV_NAME = "CLOUD_CFG"
 
 # This is expected to be a yaml formatted file
-CLOUD_CONFIG = '/etc/cloud/cloud.cfg'
+CLOUD_CONFIG = "/etc/cloud/cloud.cfg"
 
-RUN_CLOUD_CONFIG = '/run/cloud-init/cloud.cfg'
+CLEAN_RUNPARTS_DIR = "/etc/cloud/clean.d"
+
+DEFAULT_RUN_DIR = "/run/cloud-init"
 
 # What u get if no config is provided
 CFG_BUILTIN = {
-    'datasource_list': [
-        'NoCloud',
-        'ConfigDrive',
-        'OpenNebula',
-        'DigitalOcean',
-        'Azure',
-        'AltCloud',
-        'OVF',
-        'MAAS',
-        'GCE',
-        'OpenStack',
-        'AliYun',
-        'Ec2',
-        'CloudSigma',
-        'CloudStack',
-        'SmartOS',
-        'Bigstep',
-        'Scaleway',
-        'Hetzner',
-        'IBMCloud',
+    "datasource_list": [
+        "NoCloud",
+        "ConfigDrive",
+        "LXD",
+        "OpenNebula",
+        "DigitalOcean",
+        "Azure",
+        "AltCloud",
+        "VMware",
+        "OVF",
+        "MAAS",
+        "GCE",
+        "OpenStack",
+        "AliYun",
+        "Vultr",
+        "Ec2",
+        "CloudSigma",
+        "CloudStack",
+        "SmartOS",
+        "Bigstep",
+        "Scaleway",
+        "Hetzner",
+        "IBMCloud",
+        "Oracle",
+        "Exoscale",
+        "RbxCloud",
+        "UpCloud",
+        "NWCS",
+        "Akamai",
+        "WSL",
+        "CloudCIX",
         # At the end to act as a 'catch' when none of the above work...
-        'None',
+        "None",
     ],
-    'def_log_file': '/var/log/cloud-init.log',
-    'log_cfgs': [],
-    'syslog_fix_perms': ['syslog:adm', 'root:adm', 'root:wheel'],
-    'system_info': {
-        'paths': {
-            'cloud_dir': '/var/lib/cloud',
-            'templates_dir': '/etc/cloud/templates/',
+    "def_log_file": "/var/log/cloud-init.log",
+    "log_cfgs": [],
+    "syslog_fix_perms": ["syslog:adm", "root:adm", "root:wheel", "root:root"],
+    "system_info": {
+        "paths": {
+            "cloud_dir": "/var/lib/cloud",
+            "docs_dir": "/usr/share/doc/cloud-init/",
+            "templates_dir": "/etc/cloud/templates/",
         },
-        'distro': 'ubuntu',
-        'network': {'renderers': None},
+        "distro": "ubuntu",
+        "network": {"renderers": None},
     },
-    'vendor_data': {'enabled': True, 'prefix': []},
+    "vendor_data": {"enabled": True, "prefix": []},
+    "vendor_data2": {"enabled": True, "prefix": []},
 }
 
 # Valid frequencies of handlers/modules
@@ -63,4 +78,4 @@ PER_ONCE = "once"
 # Used to sanity check incoming handlers/modules frequencies
 FREQUENCIES = [PER_INSTANCE, PER_ALWAYS, PER_ONCE]
 
-# vi: ts=4 expandtab
+HOTPLUG_ENABLED_FILE = "/var/lib/cloud/hotplug.enabled"

@@ -8,19 +8,20 @@
 #
 # This file is part of cloud-init. See LICENSE file for license information.
 
+import logging
 import os
 
-from cloudinit import handlers
-from cloudinit import log as logging
-from cloudinit import util
-
-from cloudinit.settings import (PER_ALWAYS)
+from cloudinit import handlers, subp, util
+from cloudinit.settings import PER_ALWAYS
 
 LOG = logging.getLogger(__name__)
-BOOTHOOK_PREFIX = "#cloud-boothook"
 
 
 class BootHookPartHandler(handlers.Handler):
+
+    # The content prefixes this handler understands.
+    prefixes = ["#cloud-boothook"]
+
     def __init__(self, paths, datasource, **_kwargs):
         handlers.Handler.__init__(self, PER_ALWAYS)
         self.boothook_dir = paths.get_ipath("boothooks")
@@ -28,16 +29,12 @@ class BootHookPartHandler(handlers.Handler):
         if datasource:
             self.instance_id = datasource.get_instance_id()
 
-    def list_types(self):
-        return [
-            handlers.type_from_starts_with(BOOTHOOK_PREFIX),
-        ]
-
     def _write_part(self, payload, filename):
         filename = util.clean_filename(filename)
         filepath = os.path.join(self.boothook_dir, filename)
-        contents = util.strip_prefix_suffix(util.dos2unix(payload),
-                                            prefix=BOOTHOOK_PREFIX)
+        contents = util.strip_prefix_suffix(
+            util.dos2unix(payload), prefix=self.prefixes[0]
+        )
         util.write_file(filepath, contents.lstrip(), 0o700)
         return filepath
 
@@ -47,14 +44,16 @@ class BootHookPartHandler(handlers.Handler):
 
         filepath = self._write_part(payload, filename)
         try:
-            env = os.environ.copy()
-            if self.instance_id is not None:
-                env['INSTANCE_ID'] = str(self.instance_id)
-            util.subp([filepath], env=env)
-        except util.ProcessExecutionError:
+            env = (
+                {"INSTANCE_ID": str(self.instance_id)}
+                if self.instance_id
+                else {}
+            )
+            LOG.debug("Executing boothook")
+            subp.subp([filepath], update_env=env, capture=False)
+        except subp.ProcessExecutionError:
             util.logexc(LOG, "Boothooks script %s execution error", filepath)
         except Exception:
-            util.logexc(LOG, "Boothooks unknown error when running %s",
-                        filepath)
-
-# vi: ts=4 expandtab
+            util.logexc(
+                LOG, "Boothooks unknown error when running %s", filepath
+            )

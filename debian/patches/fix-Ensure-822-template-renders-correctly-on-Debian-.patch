@@ -1,0 +1,158 @@
+From f21d266eb358b5591128db3b413a72c903cadac1 Mon Sep 17 00:00:00 2001
+From: James Falcon <james.falcon@canonical.com>
+Date: Tue, 12 Aug 2025 13:08:59 -0500
+Subject: [PATCH] fix: Ensure 822 template renders correctly on Debian (#6381)
+Bug-Debian: https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1118187
+
+Fixes GH-6380
+---
+ templates/sources.list.debian.deb822.tmpl |  2 +-
+ tests/unittests/helpers.py                | 10 +++
+ tests/unittests/test_render_template.py   | 97 +++++++++++++++++++++++
+ 3 files changed, 108 insertions(+), 1 deletion(-)
+
+Index: cloud-init/templates/sources.list.debian.deb822.tmpl
+===================================================================
+--- cloud-init.orig/templates/sources.list.debian.deb822.tmpl
++++ cloud-init/templates/sources.list.debian.deb822.tmpl
+@@ -29,6 +29,6 @@ Signed-By: {{primary_key | default('/usr
+ ## Major bug fix updates produced after the final release of the distribution.
+ Types: deb deb-src
+ URIs: {{security}}
+-Suites: {{codename}}{% if codename in ('buster', 'stretch') %}/updates{% else %}-security{% endif %}
++Suites: {{codename}}{% if codename in ('buster', 'stretch') %}/updates{% else %}-security{% endif +%}
+ Components: main
+ Signed-By: {{security_key | default(primary_key, true) | default('/usr/share/keyrings/debian-archive-keyring.gpg', true)}}
+Index: cloud-init/tests/unittests/helpers.py
+===================================================================
+--- cloud-init.orig/tests/unittests/helpers.py
++++ cloud-init/tests/unittests/helpers.py
+@@ -636,6 +636,16 @@ def skipUnlessJinja():
+     return skipIf(not JINJA_AVAILABLE, "No jinja dependency present.")
+ 
+ 
++@skipUnlessJinja()
++def skipUnlessJinjaVersionGreaterThan(version=(0, 0, 0)):
++    import jinja2
++
++    return skipIf(
++        condition=tuple(map(int, jinja2.__version__.split("."))) < version,
++        reason=f"jinj2 version is less than {version}",
++    )
++
++
+ def skipIfJinja():
+     return skipIf(JINJA_AVAILABLE, "Jinja dependency present.")
+ 
+Index: cloud-init/tests/unittests/test_render_template.py
+===================================================================
+--- cloud-init.orig/tests/unittests/test_render_template.py
++++ cloud-init/tests/unittests/test_render_template.py
+@@ -6,6 +6,7 @@ import pytest
+ 
+ from cloudinit import subp, templater, util
+ from tests.helpers import cloud_init_project_dir
++from tests.unittests.helpers import skipUnlessJinjaVersionGreaterThan
+ 
+ # TODO(Look to align with tools.render-template or cloudinit.distos.OSFAMILIES)
+ DISTRO_VARIANTS = [
+@@ -121,3 +122,99 @@ class TestRenderCloudCfg:
+             system_cfg = util.load_yaml(stream.read())
+ 
+         assert renderers == system_cfg["system_info"]["network"]["renderers"]
++
++
++EXPECTED_DEBIAN = """\
++deb testmirror testcodename main
++deb-src testmirror testcodename main
++deb testsecurity testcodename-security main
++deb-src testsecurity testcodename-security main
++deb testmirror testcodename-updates main
++deb-src testmirror testcodename-updates main
++deb testmirror testcodename-backports main
++deb-src testmirror testcodename-backports main
++"""
++
++EXPECTED_DEBIAN_DEB822 = """\
++Types: deb deb-src
++URIs: testmirror
++Suites: testcodename testcodename-updates testcodename-backports
++Components: main
++Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
++Types: deb deb-src
++URIs: testsecurity
++Suites: testcodename-security
++Components: main
++Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
++"""
++
++EXPECTED_UBUNTU = """\
++deb testmirror testcodename main restricted
++deb testmirror testcodename-updates main restricted
++deb testmirror testcodename universe
++deb testmirror testcodename-updates universe
++deb testmirror testcodename multiverse
++deb testmirror testcodename-updates multiverse
++deb testmirror testcodename-backports main restricted universe multiverse
++deb testsecurity testcodename-security main restricted
++deb testsecurity testcodename-security universe
++deb testsecurity testcodename-security multiverse
++"""
++
++EXPECTED_UBUNTU_DEB822 = """\
++Types: deb
++URIs: testmirror
++Suites: testcodename testcodename-updates testcodename-backports
++Components: main universe restricted multiverse
++Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
++Types: deb
++URIs: testsecurity
++Suites: testcodename-security
++Components: main universe restricted multiverse
++Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
++"""
++
++
++class TestRenderSourcesList:
++    @pytest.mark.parametrize(
++        "template_path,expected",
++        [
++            pytest.param(
++                "templates/sources.list.debian.tmpl",
++                EXPECTED_DEBIAN,
++                id="debian",
++            ),
++            pytest.param(
++                "templates/sources.list.debian.deb822.tmpl",
++                EXPECTED_DEBIAN_DEB822,
++                id="debian_822",
++            ),
++            pytest.param(
++                "templates/sources.list.ubuntu.tmpl",
++                EXPECTED_UBUNTU,
++                id="ubuntu",
++            ),
++            pytest.param(
++                "templates/sources.list.ubuntu.deb822.tmpl",
++                EXPECTED_UBUNTU_DEB822,
++                id="ubuntu_822",
++            ),
++        ],
++    )
++    @skipUnlessJinjaVersionGreaterThan((3, 0, 0))
++    def test_render_sources_list_templates(
++        self, tmpdir, template_path, expected
++    ):
++        params = {
++            "mirror": "testmirror",
++            "security": "testsecurity",
++            "codename": "testcodename",
++        }
++        template_path = cloud_init_project_dir(template_path)
++        rendered = templater.render_string(open(template_path).read(), params)
++        filtered = "\n".join(
++            line
++            for line in rendered.splitlines()
++            if line.strip() and not line.strip().startswith("#")
++        )
++        assert filtered.strip() == expected.strip()

@@ -6,77 +6,37 @@
 #
 # This file is part of cloud-init. See LICENSE file for license information.
 
-"""
-Mounts
-------
-**Summary:** configure mount points and swap files
+"""Mounts: Configure mount points and swap files"""
 
-This module can add or remove mountpoints from ``/etc/fstab`` as well as
-configure swap. The ``mounts`` config key takes a list of fstab entries to add.
-Each entry is specified as a list of ``[ fs_spec, fs_file, fs_vfstype,
-fs_mntops, fs-freq, fs_passno ]``. For more information on these options,
-consult the manual for ``/etc/fstab``. When specifying the ``fs_spec``, if the
-device name starts with one of ``xvd``, ``sd``, ``hd``, or ``vd``, the leading
-``/dev`` may be omitted.
 
-In order to remove a previously listed mount, an entry can be added to the
-mounts list containing ``fs_spec`` for the device to be removed but no
-mountpoint (i.e. ``[ sda1 ]`` or ``[ sda1, null ]``).
-
-The ``mount_default_fields`` config key allows default options to be specified
-for the values in a ``mounts`` entry that are not specified, aside from the
-``fs_spec`` and the ``fs_file``. If specified, this must be a list containing 7
-values. It defaults to::
-
-    mount_default_fields: [none, none, "auto", "defaults,nobootwait", "0", "2"]
-
-On a systemd booted system that default is the mostly equivalent::
-
-    mount_default_fields: [none, none, "auto",
-       "defaults,nofail,x-systemd.requires=cloud-init.service", "0", "2"]
-
-Note that `nobootwait` is an upstart specific boot option that somewhat
-equates to the more standard `nofail`.
-
-Swap files can be configured by setting the path to the swap file to create
-with ``filename``, the size of the swap file with ``size`` maximum size of
-the swap file if using an ``size: auto`` with ``maxsize``. By default no
-swap file is created.
-
-**Internal name:** ``cc_mounts``
-
-**Module frequency:** per instance
-
-**Supported distros:** all
-
-**Config keys**::
-
-    mounts:
-        - [ /dev/ephemeral0, /mnt, auto, "defaults,noexec" ]
-        - [ sdc, /opt/data ]
-        - [ xvdh, /opt/data, "auto", "defaults,nofail", "0", "0" ]
-    mount_default_fields: [None, None, "auto", "defaults,nofail", "0", "2"]
-    swap:
-        filename: <file>
-        size: <"auto"/size in bytes>
-        maxsize: <size in bytes>
-"""
-
-from string import whitespace
-
+import copy
 import logging
-import os.path
+import math
+import os
 import re
+from typing import Dict, List, Optional, Tuple, cast
 
-from cloudinit import type_utils
-from cloudinit import util
+from cloudinit import performance, subp, util
+from cloudinit.cloud import Cloud
+from cloudinit.config import Config
+from cloudinit.config.schema import MetaSchema
+from cloudinit.settings import PER_INSTANCE
+
+meta: MetaSchema = {
+    "id": "cc_mounts",
+    "distros": ["all"],
+    "frequency": PER_INSTANCE,
+    "activate_by_schema_keys": [],
+}
 
 # Shortname matches 'sda', 'sda1', 'xvda', 'hda', 'sdb', xvdb, vda, vdd1, sr0
 DEVICE_NAME_FILTER = r"^([x]{0,1}[shv]d[a-z][0-9]*|sr[0-9]+)$"
-DEVICE_NAME_RE = re.compile(DEVICE_NAME_FILTER)
-WS = re.compile("[%s]+" % (whitespace))
+# Name matches 'server:/path'
+NETWORK_NAME_FILTER = r"^.+:.*"
 FSTAB_PATH = "/etc/fstab"
 MNT_COMMENT = "comment=cloudconfig"
+MB = 2**20
+GB = 2**30
 
 LOG = logging.getLogger(__name__)
 
@@ -93,55 +53,75 @@ def is_meta_device_name(name):
     return False
 
 
+def is_network_device(name):
+    # return true if this is a network device
+    if re.match(NETWORK_NAME_FILTER, name):
+        return True
+    return False
+
+
 def _get_nth_partition_for_device(device_path, partition_number):
-    potential_suffixes = [str(partition_number), 'p%s' % (partition_number,),
-                          '-part%s' % (partition_number,)]
+    potential_suffixes = [
+        str(partition_number),
+        "p%s" % (partition_number,),
+        "-part%s" % (partition_number,),
+    ]
     for suffix in potential_suffixes:
-        potential_partition_device = '%s%s' % (device_path, suffix)
+        potential_partition_device = "%s%s" % (device_path, suffix)
         if os.path.exists(potential_partition_device):
             return potential_partition_device
     return None
 
 
 def _is_block_device(device_path, partition_path=None):
-    device_name = os.path.realpath(device_path).split('/')[-1]
-    sys_path = os.path.join('/sys/block/', device_name)
+    device_name = os.path.realpath(device_path).split("/")[-1]
+    sys_path = os.path.join("/sys/block/", device_name)
     if partition_path is not None:
         sys_path = os.path.join(
-            sys_path, os.path.realpath(partition_path).split('/')[-1])
+            sys_path, os.path.realpath(partition_path).split("/")[-1]
+        )
     return os.path.exists(sys_path)
 
 
-def sanitize_devname(startname, transformer, log):
-    log.debug("Attempting to determine the real name of %s", startname)
+def sanitize_devname(startname, transformer, aliases=None):
+    LOG.debug("Attempting to determine the real name of %s", startname)
 
     # workaround, allow user to specify 'ephemeral'
     # rather than more ec2 correct 'ephemeral0'
     devname = startname
     if devname == "ephemeral":
         devname = "ephemeral0"
-        log.debug("Adjusted mount option from ephemeral to ephemeral0")
+        LOG.debug("Adjusted mount option from ephemeral to ephemeral0")
+
+    if is_network_device(startname):
+        return startname
 
     device_path, partition_number = util.expand_dotted_devname(devname)
+    orig = device_path
+
+    if aliases:
+        device_path = aliases.get(device_path, device_path)
+        if orig != device_path:
+            LOG.debug("Mapped device alias %s to %s", orig, device_path)
 
     if is_meta_device_name(device_path):
-        orig = device_path
         device_path = transformer(device_path)
         if not device_path:
             return None
         if not device_path.startswith("/"):
             device_path = "/dev/%s" % (device_path,)
-        log.debug("Mapped metadata name %s to %s", orig, device_path)
+        LOG.debug("Mapped metadata name %s to %s", orig, device_path)
     else:
-        if DEVICE_NAME_RE.match(startname):
+        if re.match(DEVICE_NAME_FILTER, startname):
             device_path = "/dev/%s" % (device_path,)
 
     partition_path = None
     if partition_number is None:
         partition_path = _get_nth_partition_for_device(device_path, 1)
     else:
-        partition_path = _get_nth_partition_for_device(device_path,
-                                                       partition_number)
+        partition_path = _get_nth_partition_for_device(
+            device_path, partition_number
+        )
         if partition_path is None:
             return None
 
@@ -152,64 +132,64 @@ def sanitize_devname(startname, transformer, log):
     return None
 
 
+def sanitized_devname_is_valid(
+    original: str, sanitized: Optional[str], fstab_devs: Dict[str, str]
+) -> bool:
+    """Get if the sanitized device name is valid."""
+    if sanitized != original:
+        LOG.debug("changed %s => %s", original, sanitized)
+    if sanitized is None:
+        LOG.debug("Ignoring nonexistent default named mount %s", original)
+        return False
+    elif sanitized in fstab_devs:
+        LOG.debug(
+            "Device %s already defined in fstab: %s",
+            sanitized,
+            fstab_devs[sanitized],
+        )
+        return False
+    return True
+
+
 def suggested_swapsize(memsize=None, maxsize=None, fsys=None):
     # make a suggestion on the size of swap for this system.
     if memsize is None:
-        memsize = util.read_meminfo()['total']
+        memsize = util.read_meminfo()["total"]
 
-    GB = 2 ** 30
-    sugg_max = 8 * GB
+    sugg_max = memsize * 2
 
-    info = {'avail': 'na', 'max_in': maxsize, 'mem': memsize}
+    info = {"avail": "na", "max_in": maxsize, "mem": memsize}
 
     if fsys is None and maxsize is None:
-        # set max to 8GB default if no filesystem given
+        # set max to default if no filesystem given
         maxsize = sugg_max
     elif fsys:
         statvfs = os.statvfs(fsys)
         avail = statvfs.f_frsize * statvfs.f_bfree
-        info['avail'] = avail
+        info["avail"] = avail
 
         if maxsize is None:
             # set to 25% of filesystem space
             maxsize = min(int(avail / 4), sugg_max)
-        elif maxsize > ((avail * .9)):
+        elif maxsize > ((avail * 0.9)):
             # set to 90% of available disk space
-            maxsize = int(avail * .9)
+            maxsize = int(avail * 0.9)
     elif maxsize is None:
         maxsize = sugg_max
 
-    info['max'] = maxsize
+    info["max"] = maxsize
 
-    formulas = [
-        # < 1G: swap = double memory
-        (1 * GB, lambda x: x * 2),
-        # < 2G: swap = 2G
-        (2 * GB, lambda x: 2 * GB),
-        # < 4G: swap = memory
-        (4 * GB, lambda x: x),
-        # < 16G: 4G
-        (16 * GB, lambda x: 4 * GB),
-        # < 64G: 1/2 M up to max
-        (64 * GB, lambda x: x / 2),
-    ]
+    if memsize < 4 * GB:
+        minsize = memsize
+    elif memsize < 16 * GB:
+        minsize = 4 * GB
+    else:
+        minsize = round(math.sqrt(memsize / GB)) * GB
 
-    size = None
-    for top, func in formulas:
-        if memsize <= top:
-            size = min(func(memsize), maxsize)
-            # if less than 1/2 memory and not much, return 0
-            if size < (memsize / 2) and size < 4 * GB:
-                size = 0
-                break
-            break
+    size = min(minsize, maxsize)
 
-    if size is not None:
-        size = maxsize
+    info["size"] = size
 
-    info['size'] = size
-
-    MB = 2 ** 20
     pinfo = {}
     for k, v in info.items():
         if isinstance(v, int):
@@ -217,10 +197,77 @@ def suggested_swapsize(memsize=None, maxsize=None, fsys=None):
         else:
             pinfo[k] = v
 
-    LOG.debug("suggest %s swap for %s memory with '%s'"
-              " disk given max=%s [max=%s]'", pinfo['size'], pinfo['mem'],
-              pinfo['avail'], pinfo['max_in'], pinfo['max'])
+    LOG.debug(
+        "suggest %s swap for %s memory with '%s' disk given max=%s [max=%s]'",
+        pinfo["size"],
+        pinfo["mem"],
+        pinfo["avail"],
+        pinfo["max_in"],
+        pinfo["max"],
+    )
     return size
+
+
+def create_swapfile(fname: str, size: str) -> None:
+    """Size is in MiB."""
+
+    errmsg = "Failed to create swapfile '%s' of size %sMB via %s: %s"
+
+    def create_swap(fname, size, method):
+        LOG.debug(
+            "Creating swapfile in '%s' on fstype '%s' using '%s'",
+            fname,
+            fstype,
+            method,
+        )
+
+        if method == "fallocate":
+            cmd = ["fallocate", "-l", "%sM" % size, fname]
+        elif method == "dd":
+            cmd = [
+                "dd",
+                "if=/dev/zero",
+                "of=%s" % fname,
+                "bs=1M",
+                "count=%s" % size,
+            ]
+        else:
+            raise subp.ProcessExecutionError(
+                "Missing dependency: 'dd' and 'fallocate' are not available"
+            )
+
+        try:
+            subp.subp(cmd, capture=True)
+        except subp.ProcessExecutionError as e:
+            LOG.info(errmsg, fname, size, method, e)
+            util.del_file(fname)
+            raise
+
+    swap_dir = os.path.dirname(fname)
+    util.ensure_dir(swap_dir)
+
+    fstype = util.get_mount_info(swap_dir)[1]
+
+    if fstype == "btrfs":
+        subp.subp(["truncate", "-s", "0", fname])
+        subp.subp(["chattr", "+C", fname])
+
+    if fstype == "xfs" and util.kernel_version() < (4, 18):
+        create_swap(fname, size, "dd")
+    else:
+        try:
+            create_swap(fname, size, "fallocate")
+        except subp.ProcessExecutionError:
+            LOG.info("fallocate swap creation failed, will attempt with dd")
+            create_swap(fname, size, "dd")
+
+    if os.path.exists(fname):
+        util.chmod(fname, 0o600)
+    try:
+        subp.subp(["mkswap", fname])
+    except subp.ProcessExecutionError:
+        util.del_file(fname)
+        raise
 
 
 def setup_swapfile(fname, size=None, maxsize=None):
@@ -229,51 +276,41 @@ def setup_swapfile(fname, size=None, maxsize=None):
     size: the size to create. set to "auto" for recommended
     maxsize: the maximum size
     """
-    tdir = os.path.dirname(fname)
+    swap_dir = os.path.dirname(fname)
     if str(size).lower() == "auto":
         try:
-            memsize = util.read_meminfo()['total']
+            memsize = util.read_meminfo()["total"]
         except IOError:
             LOG.debug("Not creating swap: failed to read meminfo")
             return
 
-        util.ensure_dir(tdir)
-        size = suggested_swapsize(fsys=tdir, maxsize=maxsize,
-                                  memsize=memsize)
+        util.ensure_dir(swap_dir)
+        size = suggested_swapsize(
+            fsys=swap_dir, maxsize=maxsize, memsize=memsize
+        )
 
+    mibsize = str(int(size / (2**20)))
     if not size:
         LOG.debug("Not creating swap: suggested size was 0")
         return
 
-    mbsize = str(int(size / (2 ** 20)))
-    msg = "creating swap file '%s' of %sMB" % (fname, mbsize)
-    try:
-        util.ensure_dir(tdir)
-        util.log_time(LOG.debug, msg, func=util.subp,
-                      args=[['sh', '-c',
-                            ('rm -f "$1" && umask 0066 && '
-                             '{ fallocate -l "${2}M" "$1" || '
-                             ' dd if=/dev/zero "of=$1" bs=1M "count=$2"; } && '
-                             'mkswap "$1" || { r=$?; rm -f "$1"; exit $r; }'),
-                             'setup_swap', fname, mbsize]])
-
-    except Exception as e:
-        raise IOError("Failed %s: %s" % (msg, e))
+    with performance.Timed("Setting up swap file"):
+        create_swapfile(fname, mibsize)
 
     return fname
 
 
 def handle_swapcfg(swapcfg):
     """handle the swap config, calling setup_swap if necessary.
-       return None or (filename, size)
+    return None or (filename, size)
     """
     if not isinstance(swapcfg, dict):
         LOG.warning("input for swap config was not a dict.")
         return None
 
-    fname = swapcfg.get('filename', '/swap.img')
-    size = swapcfg.get('size', 0)
-    maxsize = swapcfg.get('maxsize', None)
+    fname = swapcfg.get("filename", "/swap.img")
+    size = swapcfg.get("size", 0)
+    maxsize = swapcfg.get("maxsize", None)
 
     if not (size and fname):
         LOG.debug("no need to setup swap")
@@ -281,18 +318,21 @@ def handle_swapcfg(swapcfg):
 
     if os.path.exists(fname):
         if not os.path.exists("/proc/swaps"):
-            LOG.debug("swap file %s exists, but no /proc/swaps exists, "
-                      "being safe", fname)
+            LOG.debug(
+                "swap file %s exists, but no /proc/swaps exists, being safe",
+                fname,
+            )
             return fname
         try:
-            for line in util.load_file("/proc/swaps").splitlines():
+            for line in util.load_text_file("/proc/swaps").splitlines():
                 if line.startswith(fname + " "):
                     LOG.debug("swap file %s already in use", fname)
                     return fname
             LOG.debug("swap file %s exists, but not in /proc/swaps", fname)
         except Exception:
-            LOG.warning("swap file %s exists. Error reading /proc/swaps",
-                        fname)
+            LOG.warning(
+                "swap file %s exists. Error reading /proc/swaps", fname
+            )
             return fname
 
     try:
@@ -308,183 +348,239 @@ def handle_swapcfg(swapcfg):
     return None
 
 
-def handle(_name, cfg, cloud, log, _args):
-    # fs_spec, fs_file, fs_vfstype, fs_mntops, fs-freq, fs_passno
-    def_mnt_opts = "defaults,nobootwait"
-    uses_systemd = cloud.distro.uses_systemd()
-    if uses_systemd:
-        def_mnt_opts = "defaults,nofail,x-systemd.requires=cloud-init.service"
+def parse_fstab() -> Tuple[List[str], Dict[str, str], List[str]]:
+    """Parse /etc/fstab.
 
-    defvals = [None, None, "auto", def_mnt_opts, "0", "2"]
-    defvals = cfg.get("mount_default_fields", defvals)
-
-    # these are our default set of mounts
-    defmnts = [["ephemeral0", "/mnt", "auto", defvals[3], "0", "2"],
-               ["swap", "none", "swap", "sw", "0", "0"]]
-
-    cfgmnt = []
-    if "mounts" in cfg:
-        cfgmnt = cfg["mounts"]
-
-    LOG.debug("mounts configuration is %s", cfgmnt)
-
+    Parse fstab, ignoring any lines containing "comment=cloudconfig".
+    :return: A 3-tuple containing:
+        - A list of lines exactly as they appear in fstab
+        - A dictionary with key being the first token in the line
+          and value being the entire line
+        - A list of any lines that were ignored due to "comment=cloudconfig"
+    """
     fstab_lines = []
     fstab_devs = {}
     fstab_removed = []
 
-    for line in util.load_file(FSTAB_PATH).splitlines():
-        if MNT_COMMENT in line:
-            fstab_removed.append(line)
-            continue
-
-        try:
-            toks = WS.split(line)
-        except Exception:
-            pass
-        fstab_devs[toks[0]] = line
-        fstab_lines.append(line)
-
-    for i in range(len(cfgmnt)):
-        # skip something that wasn't a list
-        if not isinstance(cfgmnt[i], list):
-            log.warn("Mount option %s not a list, got a %s instead",
-                     (i + 1), type_utils.obj_name(cfgmnt[i]))
-            continue
-
-        start = str(cfgmnt[i][0])
-        sanitized = sanitize_devname(start, cloud.device_name_to_device, log)
-        if sanitized != start:
-            log.debug("changed %s => %s" % (start, sanitized))
-
-        if sanitized is None:
-            log.debug("Ignoring nonexistent named mount %s", start)
-            continue
-        elif sanitized in fstab_devs:
-            log.info("Device %s already defined in fstab: %s",
-                     sanitized, fstab_devs[sanitized])
-            continue
-
-        cfgmnt[i][0] = sanitized
-
-        # in case the user did not quote a field (likely fs-freq, fs_passno)
-        # but do not convert None to 'None' (LP: #898365)
-        for j in range(len(cfgmnt[i])):
-            if cfgmnt[i][j] is None:
+    if os.path.exists(FSTAB_PATH):
+        for line in util.load_text_file(FSTAB_PATH).splitlines():
+            if MNT_COMMENT in line:
+                fstab_removed.append(line)
                 continue
-            else:
-                cfgmnt[i][j] = str(cfgmnt[i][j])
+            toks = line.split()
+            if toks:
+                fstab_devs[toks[0]] = line
+                fstab_lines.append(line)
+    return fstab_lines, fstab_devs, fstab_removed
 
-    for i in range(len(cfgmnt)):
-        # fill in values with defaults from defvals above
-        for j in range(len(defvals)):
-            if len(cfgmnt[i]) <= j:
-                cfgmnt[i].append(defvals[j])
-            elif cfgmnt[i][j] is None:
-                cfgmnt[i][j] = defvals[j]
 
-        # if the second entry in the list is 'None' this
-        # clears all previous entries of that same 'fs_spec'
-        # (fs_spec is the first field in /etc/fstab, ie, that device)
-        if cfgmnt[i][1] is None:
-            for j in range(i):
-                if cfgmnt[j][0] == cfgmnt[i][0]:
-                    cfgmnt[j][1] = None
+def sanitize_mounts_configuration(
+    mounts: List[Optional[List[Optional[str]]]],
+    fstab_devs: Dict[str, str],
+    device_aliases: Dict[str, str],
+    default_fields: List[Optional[str]],
+    cloud: Cloud,
+) -> List[List[str]]:
+    """Sanitize mounts to ensure we can work with devices in config.
 
-    # for each of the "default" mounts, add them only if no other
-    # entry has the same device name
-    for defmnt in defmnts:
-        start = defmnt[0]
-        sanitized = sanitize_devname(start, cloud.device_name_to_device, log)
-        if sanitized != start:
-            log.debug("changed default device %s => %s" % (start, sanitized))
-
-        if sanitized is None:
-            log.debug("Ignoring nonexistent default named mount %s", start)
-            continue
-        elif sanitized in fstab_devs:
-            log.debug("Device %s already defined in fstab: %s",
-                      sanitized, fstab_devs[sanitized])
+    Specifically:
+     - Ensure the mounts configuration is a list of lists
+     - Transform and sanitize device names
+     - Ensure all tokens are strings
+     - Add default options to any lines without options
+    """
+    updated_lines = []
+    for line in mounts:
+        # skip something that wasn't a list
+        if not isinstance(line, list):
+            LOG.warning("Mount option not a list, ignoring: %s", line)
             continue
 
-        defmnt[0] = sanitized
-
-        cfgmnt_has = False
-        for cfgm in cfgmnt:
-            if cfgm[0] == defmnt[0]:
-                cfgmnt_has = True
-                break
-
-        if cfgmnt_has:
-            log.debug(("Not including %s, already"
-                       " previously included"), start)
-            continue
-        cfgmnt.append(defmnt)
-
-    # now, each entry in the cfgmnt list has all fstab values
-    # if the second field is None (not the string, the value) we skip it
-    actlist = []
-    for x in cfgmnt:
-        if x[1] is None:
-            log.debug("Skipping nonexistent device named %s", x[0])
+        start = str(line[0])
+        sanitized_devname = sanitize_devname(
+            start, cloud.device_name_to_device, aliases=device_aliases
+        )
+        if sanitized_devname_is_valid(start, sanitized_devname, fstab_devs):
+            updated_line = [sanitized_devname] + line[1:]
         else:
-            actlist.append(x)
+            updated_line = line
 
-    swapret = handle_swapcfg(cfg.get('swap', {}))
-    if swapret:
-        actlist.append([swapret, "none", "swap", "sw", "0", "0"])
+        # Ensure all tokens are strings as users may not have quoted them
+        # If token is None, replace it with the default value
+        for index, token in enumerate(updated_line):
+            if token is None:
+                updated_line[index] = default_fields[index]
+            else:
+                updated_line[index] = str(updated_line[index])
 
-    if len(actlist) == 0:
-        log.debug("No modifications to fstab needed")
+        # fill remaining values with defaults from defvals above
+        updated_line += default_fields[len(updated_line) :]
+
+        updated_lines.append(updated_line)
+    return updated_lines
+
+
+def remove_nonexistent_devices(mounts: List[List[str]]) -> List[List[str]]:
+    """Remove any entries that have a device name that doesn't exist.
+
+    If the second field of a mount line is None (not the string, the value),
+    we skip it along with any other entries that came before it that share
+    the same device name.
+    """
+    actlist = []
+    dev_denylist = []
+    for line in mounts[::-1]:
+        if line[1] is None or line[0] in dev_denylist:
+            LOG.debug("Skipping nonexistent device named %s", line[0])
+            dev_denylist.append(line[0])
+        else:
+            actlist.append(line)
+    # Reverse the list to maintain the original order
+    return actlist[::-1]
+
+
+def add_default_mounts_to_cfg(
+    mounts: List[List[str]],
+    default_mount_options: str,
+    fstab_devs: Dict[str, str],
+    device_aliases: Dict[str, str],
+    cloud: Cloud,
+) -> List[List[str]]:
+    """Add default mounts to the user provided mount configuration.
+
+    Add them only if no other entry has the same device name
+    """
+    new_mounts = copy.deepcopy(mounts)
+    for default_mount in [
+        ["ephemeral0", "/mnt", "auto", default_mount_options, "0", "2"],
+        ["swap", "none", "swap", "sw", "0", "0"],  # Is this used anywhere?
+    ]:
+        start = default_mount[0]
+        sanitized = sanitize_devname(
+            start, cloud.device_name_to_device, aliases=device_aliases
+        )
+        if not sanitized_devname_is_valid(start, sanitized, fstab_devs):
+            continue
+
+        # Cast here because the previous call checked for None
+        default_mount[0] = cast(str, sanitized)
+
+        default_already_exists = any(
+            cfgm[0] == default_mount[0] for cfgm in mounts
+        )
+        if default_already_exists:
+            LOG.debug("Not including %s, already previously included", start)
+            continue
+        new_mounts.append(default_mount)
+    return new_mounts
+
+
+def add_comment(actlist: List[List[str]]) -> List[List[str]]:
+    """Add "comment=cloudconfig" to the mount options of each entry."""
+    return [
+        entry[:3] + [f"{entry[3]},{MNT_COMMENT}"] + entry[4:]
+        for entry in actlist
+    ]
+
+
+def activate_swap_if_needed(actlist: List[List[str]]) -> None:
+    """Call 'swapon -a' if any entry has a swap fs type."""
+    if any(entry[2] == "swap" for entry in actlist):
+        subp.subp(["swapon", "-a"])
+
+
+def mount_if_needed(
+    uses_systemd: bool, changes_made: bool, dirs: List[str]
+) -> None:
+    """Call 'mount -a' if needed.
+
+    If changes were made, always call 'mount -a'. Otherwise, call 'mount -a'
+    if any of the directories in the mount list are not already mounted.
+    """
+    do_mount = False
+    if changes_made:
+        do_mount = True
+    else:
+        mount_points = {
+            val["mountpoint"]
+            for val in util.mounts().values()
+            if "mountpoint" in val
+        }
+        do_mount = bool(set(dirs).difference(mount_points))
+
+    if do_mount:
+        subp.subp(["mount", "-a"])
+        if uses_systemd:
+            subp.subp(["systemctl", "daemon-reload"])
+
+
+def handle(name: str, cfg: Config, cloud: Cloud, args: list) -> None:
+    """Handle the mounts configuration."""
+    # fs_spec, fs_file, fs_vfstype, fs_mntops, fs-freq, fs_passno
+    uses_systemd = cloud.distro.uses_systemd()
+    default_mount_options = (
+        "defaults,nofail,x-systemd.after=cloud-init-network.service,_netdev"
+        if uses_systemd
+        else "defaults,nobootwait"
+    )
+
+    hardcoded_defaults = [None, None, "auto", default_mount_options, "0", "2"]
+    default_fields: List[Optional[str]] = cfg.get(
+        "mount_default_fields", hardcoded_defaults
+    )
+    mounts: List[Optional[List[Optional[str]]]] = cfg.get("mounts", [])
+
+    LOG.debug("mounts configuration is %s", mounts)
+
+    fstab_lines, fstab_devs, fstab_removed = parse_fstab()
+    device_aliases = cfg.get("device_aliases", {})
+
+    updated_cfg = sanitize_mounts_configuration(
+        mounts, fstab_devs, device_aliases, default_fields, cloud
+    )
+    updated_cfg = add_default_mounts_to_cfg(
+        updated_cfg, default_mount_options, fstab_devs, device_aliases, cloud
+    )
+    updated_cfg = remove_nonexistent_devices(updated_cfg)
+    updated_cfg = add_comment(updated_cfg)
+
+    swapfile = handle_swapcfg(cfg.get("swap", {}))
+    if swapfile:
+        updated_cfg.append([swapfile, "none", "swap", "sw", "0", "0"])
+
+    if not updated_cfg:
+        # This will only be true if there is no mount configuration at all
+        # Even if fstab has no functional changes, we'll get past this point
+        # as we remove any 'comment=cloudconfig' lines and then add them back
+        # in.
+        LOG.debug("No modifications to fstab needed")
         return
 
-    cc_lines = []
-    needswap = False
-    dirs = []
-    for line in actlist:
-        # write 'comment' in the fs_mntops, entry,  claiming this
-        line[3] = "%s,%s" % (line[3], MNT_COMMENT)
-        if line[2] == "swap":
-            needswap = True
-        if line[1].startswith("/"):
-            dirs.append(line[1])
-        cc_lines.append('\t'.join(line))
+    cfg_lines = ["\t".join(entry) for entry in updated_cfg]
+
+    dirs = [d[1] for d in updated_cfg if d[1].startswith("/")]
 
     for d in dirs:
         try:
             util.ensure_dir(d)
         except Exception:
-            util.logexc(log, "Failed to make '%s' config-mount", d)
+            util.logexc(LOG, "Failed to make '%s' config-mount", d)
 
-    sadds = [WS.sub(" ", n) for n in cc_lines]
-    sdrops = [WS.sub(" ", n) for n in fstab_removed]
+    sadds = [n.replace("\t", " ") for n in cfg_lines]
+    sdrops = [n.replace("\t", " ") for n in fstab_removed]
 
-    sops = (["- " + drop for drop in sdrops if drop not in sadds] +
-            ["+ " + add for add in sadds if add not in sdrops])
+    sops = [f"- {drop}" for drop in sdrops if drop not in sadds] + [
+        f"+ {add}" for add in sadds if add not in sdrops
+    ]
 
-    fstab_lines.extend(cc_lines)
-    contents = "%s\n" % ('\n'.join(fstab_lines))
+    fstab_lines.extend(cfg_lines)
+    contents = "%s\n" % "\n".join(fstab_lines)
     util.write_file(FSTAB_PATH, contents)
 
-    activate_cmds = []
-    if needswap:
-        activate_cmds.append(["swapon", "-a"])
-
-    if len(sops) == 0:
-        log.debug("No changes to /etc/fstab made.")
+    if sops:
+        LOG.debug("Changes to fstab: %s", sops)
     else:
-        log.debug("Changes to fstab: %s", sops)
-        activate_cmds.append(["mount", "-a"])
-        if uses_systemd:
-            activate_cmds.append(["systemctl", "daemon-reload"])
+        LOG.debug("No changes to /etc/fstab made.")
 
-    fmt = "Activating swap and mounts with: %s"
-    for cmd in activate_cmds:
-        fmt = "Activate mounts: %s:" + ' '.join(cmd)
-        try:
-            util.subp(cmd)
-            log.debug(fmt, "PASS")
-        except util.ProcessExecutionError:
-            log.warn(fmt, "FAIL")
-            util.logexc(log, fmt, "FAIL")
-
-# vi: ts=4 expandtab
+    activate_swap_if_needed(updated_cfg)
+    mount_if_needed(uses_systemd, bool(sops), dirs)

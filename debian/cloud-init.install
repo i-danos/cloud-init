@@ -1,4 +1,2 @@
-debian/00_debian.cfg etc/cloud/cloud.cfg.d
 debian/cloud.cfg etc/cloud
-tools/21-cloudinit.conf etc/rsyslog.d
 tools/Z99-cloud-locale-test.sh etc/profile.d

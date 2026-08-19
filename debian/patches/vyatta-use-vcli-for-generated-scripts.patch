@@ -1,0 +1,26 @@
+Index: cloud-init-25.1.4/cloudinit/subp.py
+===================================================================
+--- cloud-init-25.1.4.orig/cloudinit/subp.py
++++ cloud-init-25.1.4/cloudinit/subp.py
+@@ -369,7 +369,7 @@ def runparts(dirp, skip_no_exist=True, e
+             attempted.append(exe_path)
+             try:
+                 with signal_handler.suspend_crash():
+-                    subp(prefix + [exe_path], capture=False)
++                    subp(["/bin/vcli", "-f", exe_path], capture=False)
+             except ProcessExecutionError as e:
+                 LOG.debug(e)
+                 failed.append(exe_name)
+Index: cloud-init-25.1.4/cloudinit/util.py
+===================================================================
+--- cloud-init-25.1.4.orig/cloudinit/util.py
++++ cloud-init-25.1.4/cloudinit/util.py
+@@ -2330,7 +2330,7 @@ def shellify(cmdlist, add_header=True):
+ 
+     content = ""
+     if add_header:
+-        content += "#!/bin/sh\n"
++        content += "#!/bin/vcli -f\n"
+     escaped = "%s%s%s%s" % ("'", "\\", "'", "'")
+     cmds_made = 0
+     for args in cmdlist:

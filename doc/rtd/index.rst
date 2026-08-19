@@ -1,49 +1,111 @@
 .. _index:
 
-.. http://thomas-cokelaer.info/tutorials/sphinx/rest_syntax.html
-.. As suggested at link above for headings use:
-..   # with overline, for parts
-..   * with overline, for chapters
-..   =, for sections
-..   -, for subsections
-..   ^, for subsubsections
-..   “, for paragraphs
+Cloud-init documentation
+########################
 
-#############
-Documentation
-#############
+``Cloud-init`` is the *industry standard* multi-distribution method for
+cross-platform cloud instance initialization. It is supported across all major
+public cloud providers, provisioning systems for private cloud infrastructure,
+and bare-metal installations.
 
-.. rubric:: Everything about cloud-init, a set of **python** scripts and
-            utilities to make your cloud images be all they can be!
+During boot, ``cloud-init`` identifies the cloud it is running on and
+initializes the system accordingly. Cloud instances will automatically be
+provisioned during first boot with networking, storage, SSH keys, packages
+and various other system aspects already configured.
 
-*******
-Summary
-*******
+``Cloud-init`` provides the necessary glue between launching a cloud instance
+and connecting to it so that it works as expected.
 
-`Cloud-init`_ is the *defacto* multi-distribution package that handles early
-initialization of a cloud instance.
+For cloud users, ``cloud-init`` provides no-install first-boot configuration
+management of a cloud instance. For cloud providers, it provides instance setup
+that can be integrated with your cloud.
 
-----
+If you would like to read more about what cloud-init is, what it does and how
+it works, check out our :ref:`high-level introduction<introduction>`
+to the tool.
+
+-----
+
+.. grid:: 1 1 2 2
+   :gutter: 3
+
+   .. grid-item-card:: **Tutorials**
+       :link: tutorial/index
+       :link-type: doc
+
+       Get started - a hands-on introduction to ``cloud-init`` for new users
+
+   .. grid-item-card:: **How-to guides**
+       :link: howto/index
+       :link-type: doc
+
+       Step-by-step guides covering key operations and common tasks
+
+.. grid:: 1 1 2 2
+   :gutter: 3
+   :reverse:
+
+   .. grid-item-card:: **Reference**
+       :link: reference/index
+       :link-type: doc
+
+       Technical information - specifications, APIs, architecture
+
+   .. grid-item-card:: **Explanation**
+       :link: explanation/index
+       :link-type: doc
+
+       Discussion and clarification of key topics
+
+-----
+
+Having trouble? We would like to help!
+======================================
+
+- :ref:`Check out our tutorials<tutorial_index>` if you're new to
+  ``cloud-init``
+- :ref:`Try the FAQ<faq>` for answers to some common questions
+- You can also search the ``cloud-init`` `mailing list archive`_
+- Find a bug? `Report bugs on GitHub Issues`_
+
+Project and community
+=====================
+
+``Cloud-init`` is an open source project that warmly welcomes community
+projects, contributions, suggestions, fixes and constructive feedback.
+
+* Read our `Code of Conduct`_
+* Ask questions in the ``#cloud-init`` `IRC channel on Libera <IRC_>`_
+* Follow announcements or ask a question on `the cloud-init Discourse forum`_
+* Join the `cloud-init mailing list`_
+* :ref:`Contribute on GitHub<contributing>`
+* `Release schedule`_
 
 .. toctree::
+   :hidden:
    :maxdepth: 2
 
-   topics/capabilities.rst
-   topics/availability.rst
-   topics/format.rst
-   topics/dir_layout.rst
-   topics/examples.rst
-   topics/boot.rst
-   topics/datasources.rst
-   topics/logging.rst
-   topics/modules.rst
-   topics/merging.rst
-   topics/network-config.rst
-   topics/vendordata.rst
-   topics/debugging.rst
-   topics/moreinfo.rst
-   topics/hacking.rst
-   topics/tests.rst
+   tutorial/index
+   howto/index
+   reference/index
+   explanation/index
 
-.. _Cloud-init: https://launchpad.net/cloud-init
-.. vi: textwidth=78
+
+.. toctree::
+   :caption: Development
+   :hidden:
+   :maxdepth: 1
+
+   Contributing overview <development/index.rst>
+   Contribute to code <development/contribute_code.rst>
+   Contribute to docs <development/contribute_docs.rst>
+   Community <development/summit.rst>
+
+
+.. LINKS
+.. include:: links.txt
+.. _the cloud-init Discourse forum: https://discourse.ubuntu.com/c/server/cloud-init/
+.. _cloud-init mailing list: https://launchpad.net/~cloud-init
+.. _mailing list archive: https://lists.launchpad.net/cloud-init/
+.. _Release schedule: https://discourse.ubuntu.com/t/cloud-init-release-schedule/32244
+.. _Report bugs on GitHub Issues: https://github.com/canonical/cloud-init/issues

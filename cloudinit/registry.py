@@ -5,7 +5,7 @@
 import copy
 
 
-class DictRegistry(object):
+class DictRegistry:
     """A simple registry for a mapping of objects."""
 
     def __init__(self):
@@ -18,7 +18,8 @@ class DictRegistry(object):
         """Add item to the registry."""
         if key in self._items:
             raise ValueError(
-                'Item already registered with key {0}'.format(key))
+                "Item already registered with key {0}".format(key)
+            )
         self._items[key] = item
 
     def unregister_item(self, key, force=True):
@@ -35,5 +36,3 @@ class DictRegistry(object):
         This cannot be used to modify the contents of the registry.
         """
         return copy.copy(self._items)
-
-# vi: ts=4 expandtab

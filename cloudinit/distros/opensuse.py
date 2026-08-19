@@ -8,71 +8,111 @@
 #
 # This file is part of cloud-init. See LICENSE file for license information.
 
-from cloudinit import distros
+import logging
+import os
 
-from cloudinit.distros.parsers.hostname import HostnameConf
-
-from cloudinit import helpers
-from cloudinit import log as logging
-from cloudinit import util
-
-from cloudinit.distros import net_util
+from cloudinit import distros, helpers, subp, util
+from cloudinit.distros import PackageList
 from cloudinit.distros import rhel_util as rhutil
-from cloudinit.settings import PER_INSTANCE
+from cloudinit.distros.parsers.hostname import HostnameConf
+from cloudinit.settings import PER_ALWAYS, PER_INSTANCE
 
 LOG = logging.getLogger(__name__)
 
 
 class Distro(distros.Distro):
-    clock_conf_fn = '/etc/sysconfig/clock'
-    hostname_conf_fn = '/etc/HOSTNAME'
-    init_cmd = ['service']
-    locale_conf_fn = '/etc/sysconfig/language'
-    network_conf_fn = '/etc/sysconfig/network'
-    network_script_tpl = '/etc/sysconfig/network/ifcfg-%s'
-    resolve_conf_fn = '/etc/resolv.conf'
-    route_conf_tpl = '/etc/sysconfig/network/ifroute-%s'
-    systemd_hostname_conf_fn = '/etc/hostname'
-    systemd_locale_conf_fn = '/etc/locale.conf'
-    tz_local_fn = '/etc/localtime'
+    clock_conf_fn = "/etc/sysconfig/clock"
+    hostname_conf_fn = "/etc/HOSTNAME"
+    init_cmd = ["service"]
+    locale_conf_fn = "/etc/sysconfig/language"
+    network_conf_fn = "/etc/sysconfig/network/config"
+    systemd_hostname_conf_fn = "/etc/hostname"
+    systemd_locale_conf_fn = "/etc/locale.conf"
+    tz_local_fn = "/etc/localtime"
+    renderer_configs = {
+        "sysconfig": {
+            "control": "etc/sysconfig/network/config",
+            "flavor": "suse",
+            "iface_templates": "%(base)s/network/ifcfg-%(name)s",
+            "netrules_path": (
+                "etc/udev/rules.d/85-persistent-net-cloud-init.rules"
+            ),
+            "route_templates": {
+                "ipv4": "%(base)s/network/ifroute-%(name)s",
+                "ipv6": "%(base)s/network/ifroute-%(name)s",
+            },
+        }
+    }
 
     def __init__(self, name, cfg, paths):
         distros.Distro.__init__(self, name, cfg, paths)
         self._runner = helpers.Runners(paths)
-        self.osfamily = 'suse'
-        cfg['ssh_svcname'] = 'sshd'
+        self.osfamily = "suse"
+        self.update_method = None
+        self.read_only_root = False
+        cfg["ssh_svcname"] = "sshd"
         if self.uses_systemd():
-            self.init_cmd = ['systemctl']
-            cfg['ssh_svcname'] = 'sshd.service'
+            self.init_cmd = ["systemctl"]
+            cfg["ssh_svcname"] = "sshd.service"
 
     def apply_locale(self, locale, out_fn=None):
         if self.uses_systemd():
             if not out_fn:
                 out_fn = self.systemd_locale_conf_fn
-            locale_cfg = {'LANG': locale}
+            locale_cfg = {"LANG": locale}
         else:
             if not out_fn:
                 out_fn = self.locale_conf_fn
-            locale_cfg = {'RC_LANG': locale}
+            locale_cfg = {"RC_LANG": locale}
         rhutil.update_sysconfig_file(out_fn, locale_cfg)
 
-    def install_packages(self, pkglist):
+    def install_packages(self, pkglist: PackageList):
         self.package_command(
-            'install',
-            args='--auto-agree-with-licenses',
-            pkgs=pkglist
+            "install", args="--auto-agree-with-licenses", pkgs=pkglist
         )
 
     def package_command(self, command, args=None, pkgs=None):
         if pkgs is None:
             pkgs = []
 
+        self._set_update_method()
+        if self.read_only_root and not self.update_method == "transactional":
+            LOG.error(
+                "Package operation requested but read only root "
+                "without btrfs and transactional-updata"
+            )
+            return
+
         # No user interaction possible, enable non-interactive mode
-        cmd = ['zypper', '--non-interactive']
+        if self.update_method == "zypper":
+            cmd = ["zypper", "--non-interactive"]
+        else:
+            cmd = [
+                "transactional-update",
+                "--non-interactive",
+                "--drop-if-no-change",
+                "pkg",
+            ]
 
         # Command is the operation, such as install
-        if command == 'upgrade':
-            command = 'update'
+        if command == "upgrade":
+            command = "update"
+        if (
+            not pkgs
+            and self.update_method == "transactional"
+            and command == "update"
+        ):
+            command = "up"
+            cmd = [
+                "transactional-update",
+                "--non-interactive",
+                "--drop-if-no-change",
+            ]
+        # Repo refresh only modifies data in the read-write path,
+        # always uses zypper
+        if command == "refresh":
+            # Repo refresh is a zypper only option, ignore the t-u setting
+            cmd = ["zypper", "--non-interactive"]
         cmd.append(command)
 
         # args are the arguments to the command, not global options
@@ -81,11 +121,16 @@ class Distro(distros.Distro):
         elif args and isinstance(args, list):
             cmd.extend(args)
 
-        pkglist = util.expand_package_list('%s-%s', pkgs)
+        pkglist = util.expand_package_list("%s-%s", pkgs)
         cmd.extend(pkglist)
 
         # Allow the output of this to flow outwards (ie not be captured)
-        util.subp(cmd, capture=False)
+        subp.subp(cmd, capture=False)
+
+        if self.update_method == "transactional":
+            LOG.info(
+                "To use/activate the installed packages reboot the system"
+            )
 
     def set_timezone(self, tz):
         tz_file = self._find_tz_file(tz)
@@ -97,27 +142,25 @@ class Distro(distros.Distro):
         else:
             # Adjust the sysconfig clock zone setting
             clock_cfg = {
-                'TIMEZONE': str(tz),
+                "TIMEZONE": str(tz),
             }
             rhutil.update_sysconfig_file(self.clock_conf_fn, clock_cfg)
             # This ensures that the correct tz will be used for the system
             util.copy(tz_file, self.tz_local_fn)
 
-    def update_package_sources(self):
-        self._runner.run("update-sources", self.package_command,
-                         ['refresh'], freq=PER_INSTANCE)
-
-    def _bring_up_interfaces(self, device_names):
-        if device_names and 'all' in device_names:
-            raise RuntimeError(('Distro %s can not translate '
-                                'the device name "all"') % (self.name))
-        return distros.Distro._bring_up_interfaces(self, device_names)
+    def update_package_sources(self, *, force=False):
+        self._runner.run(
+            "update-sources",
+            self.package_command,
+            ["refresh"],
+            freq=PER_ALWAYS if force else PER_INSTANCE,
+        )
 
     def _read_hostname(self, filename, default=None):
-        if self.uses_systemd() and filename.endswith('/previous-hostname'):
-            return util.load_file(filename).strip()
+        if self.uses_systemd() and filename.endswith("/previous-hostname"):
+            return util.load_text_file(filename).strip()
         elif self.uses_systemd():
-            (out, _err) = util.subp(['hostname'])
+            (out, _err) = subp.subp(["hostname"])
             if len(out):
                 return out
             else:
@@ -132,8 +175,11 @@ class Distro(distros.Distro):
                 return default
             return hostname
 
+    def _get_localhost_ip(self):
+        return "127.0.1.1"
+
     def _read_hostname_conf(self, filename):
-        conf = HostnameConf(util.load_file(filename))
+        conf = HostnameConf(util.load_text_file(filename))
         conf.parse()
         return conf
 
@@ -144,92 +190,97 @@ class Distro(distros.Distro):
             host_fn = self.hostname_conf_fn
         return (host_fn, self._read_hostname(host_fn))
 
-    def _write_hostname(self, hostname, out_fn):
-        if self.uses_systemd() and out_fn.endswith('/previous-hostname'):
-            util.write_file(out_fn, hostname)
+    def _set_update_method(self):
+        """Decide if we want to use transactional-update or zypper"""
+        if self.update_method is None:
+            result = util.get_mount_info("/")
+            fs_type = ""
+            if result:
+                (devpth, fs_type, mount_point) = result
+                # Check if the file system is read only
+                mounts = util.load_text_file("/proc/mounts").split("\n")
+                for mount in mounts:
+                    if mount.startswith(devpth):
+                        mount_info = mount.split()
+                        if mount_info[1] != mount_point:
+                            continue
+                        self.read_only_root = mount_info[3].startswith("ro")
+                        break
+                if fs_type.lower() == "btrfs" and os.path.exists(
+                    "/usr/sbin/transactional-update"
+                ):
+                    self.update_method = "transactional"
+                else:
+                    self.update_method = "zypper"
+            else:
+                LOG.info(
+                    "Could not determine filesystem type of '/' using zypper"
+                )
+                self.update_method = "zypper"
+
+    def _write_hostname(self, hostname, filename):
+        create_hostname_file = util.get_cfg_option_bool(
+            self._cfg, "create_hostname_file", True
+        )
+        if self.uses_systemd() and filename.endswith("/previous-hostname"):
+            util.write_file(filename, hostname)
         elif self.uses_systemd():
-            util.subp(['hostnamectl', 'set-hostname', str(hostname)])
+            if create_hostname_file:
+                subp.subp(["hostnamectl", "set-hostname", str(hostname)])
+            else:
+                subp.subp(
+                    [
+                        "hostnamectl",
+                        "set-hostname",
+                        "--transient",
+                        str(hostname),
+                    ]
+                )
         else:
             conf = None
             try:
                 # Try to update the previous one
                 # so lets see if we can read it first.
-                conf = self._read_hostname_conf(out_fn)
+                conf = self._read_hostname_conf(filename)
             except IOError:
-                pass
+                if create_hostname_file:
+                    pass
+                else:
+                    LOG.info(
+                        "create_hostname_file is False; hostname file not"
+                        "created"
+                    )
+                    return
             if not conf:
-                conf = HostnameConf('')
+                conf = HostnameConf("")
             conf.set_hostname(hostname)
-            util.write_file(out_fn, str(conf), 0o644)
-
-    def _write_network(self, settings):
-        # Convert debian settings to ifcfg format
-        entries = net_util.translate_network(settings)
-        LOG.debug("Translated ubuntu style network settings %s into %s",
-                  settings, entries)
-        # Make the intermediate format as the suse format...
-        nameservers = []
-        searchservers = []
-        dev_names = entries.keys()
-        for (dev, info) in entries.items():
-            net_fn = self.network_script_tpl % (dev)
-            route_fn = self.route_conf_tpl % (dev)
-            mode = None
-            if info.get('auto', None):
-                mode = 'auto'
-            else:
-                mode = 'manual'
-            bootproto = info.get('bootproto', None)
-            gateway = info.get('gateway', None)
-            net_cfg = {
-                'BOOTPROTO': bootproto,
-                'BROADCAST': info.get('broadcast'),
-                'GATEWAY': gateway,
-                'IPADDR': info.get('address'),
-                'LLADDR': info.get('hwaddress'),
-                'NETMASK': info.get('netmask'),
-                'STARTMODE': mode,
-                'USERCONTROL': 'no'
-            }
-            if dev != 'lo':
-                net_cfg['ETHTOOL_OPTIONS'] = ''
-            else:
-                net_cfg['FIREWALL'] = 'no'
-            rhutil.update_sysconfig_file(net_fn, net_cfg, True)
-            if gateway and bootproto == 'static':
-                default_route = 'default    %s' % gateway
-                util.write_file(route_fn, default_route, 0o644)
-            if 'dns-nameservers' in info:
-                nameservers.extend(info['dns-nameservers'])
-            if 'dns-search' in info:
-                searchservers.extend(info['dns-search'])
-        if nameservers or searchservers:
-            rhutil.update_resolve_conf_file(self.resolve_conf_fn,
-                                            nameservers, searchservers)
-        return dev_names
+            util.write_file(filename, str(conf), 0o644)
 
     @property
     def preferred_ntp_clients(self):
         """The preferred ntp client is dependent on the version."""
 
-        """Allow distro to determine the preferred ntp client list"""
+        # Allow distro to determine the preferred ntp client list
         if not self._preferred_ntp_clients:
-            distro_info = util.system_info()['dist']
+            distro_info = util.system_info()["dist"]
             name = distro_info[0]
-            major_ver = int(distro_info[1].split('.')[0])
+            major_ver = int(distro_info[1].split(".")[0])
 
             # This is horribly complicated because of a case of
             # "we do not care if versions should be increasing syndrome"
-            if (
-                (major_ver >= 15 and 'openSUSE' not in name) or
-                (major_ver >= 15 and 'openSUSE' in name and major_ver != 42)
+            if (major_ver >= 15 and "openSUSE" not in name) or (
+                major_ver >= 15 and "openSUSE" in name and major_ver != 42
             ):
-                self._preferred_ntp_clients = ['chrony',
-                                               'systemd-timesyncd', 'ntp']
+                self._preferred_ntp_clients = [
+                    "chrony",
+                    "systemd-timesyncd",
+                    "ntp",
+                ]
             else:
-                self._preferred_ntp_clients = ['ntp',
-                                               'systemd-timesyncd', 'chrony']
+                self._preferred_ntp_clients = [
+                    "ntp",
+                    "systemd-timesyncd",
+                    "chrony",
+                ]
 
         return self._preferred_ntp_clients
-
-# vi: ts=4 expandtab

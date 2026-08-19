@@ -6,27 +6,25 @@
 #
 # This file is part of cloud-init. See LICENSE file for license information.
 
-from __future__ import print_function
-
 import hashlib
+import logging
 import os
 import time
 
-from cloudinit import log as logging
-from cloudinit import sources
-from cloudinit import url_helper
-from cloudinit import util
+from cloudinit import sources, url_helper, util
+from cloudinit.net.cmdline import KlibcNetworkConfigSource
+from cloudinit.sources import NetworkConfigSource
 
 LOG = logging.getLogger(__name__)
 MD_VERSION = "2012-03-01"
 
 DS_FIELDS = [
     # remote path, location in dictionary, binary data?, optional?
-    ("meta-data/instance-id", 'meta-data/instance-id', False, False),
-    ("meta-data/local-hostname", 'meta-data/local-hostname', False, False),
-    ("meta-data/public-keys", 'meta-data/public-keys', False, True),
-    ('meta-data/vendor-data', 'vendor-data', True, True),
-    ('user-data', 'user-data', True, True),
+    ("meta-data/instance-id", "meta-data/instance-id", False, False),
+    ("meta-data/local-hostname", "meta-data/local-hostname", False, False),
+    ("meta-data/public-keys", "meta-data/public-keys", False, True),
+    ("meta-data/vendor-data", "vendor-data", True, True),
+    ("user-data", "user-data", True, True),
 ]
 
 
@@ -45,10 +43,14 @@ class DataSourceMAAS(sources.DataSource):
     id_hash = None
     _oauth_helper = None
 
+    # Setup read_url parameters per get_url_params.
+    url_max_wait = 120
+    url_timeout = 50
+
     def __init__(self, sys_cfg, distro, paths):
         sources.DataSource.__init__(self, sys_cfg, distro, paths)
         self.base_url = None
-        self.seed_dir = os.path.join(paths.seed_dir, 'maas')
+        self.seed_dir = os.path.join(paths.seed_dir, "maas")
         self.id_hash = get_id_from_ds_cfg(self.ds_cfg)
 
     @property
@@ -74,7 +76,7 @@ class DataSourceMAAS(sources.DataSource):
             raise
 
         # If there is no metadata_url, then we're not configured
-        url = mcfg.get('metadata_url', None)
+        url = mcfg.get("metadata_url", None)
         if not url:
             return False
 
@@ -87,9 +89,14 @@ class DataSourceMAAS(sources.DataSource):
                 return False
 
             self._set_data(
-                url, read_maas_seed_url(
-                    url, read_file_or_url=self.oauth_helper.readurl,
-                    paths=self.paths, retries=1))
+                url,
+                read_maas_seed_url(
+                    url,
+                    read_file_or_url=self.oauth_helper.readurl,
+                    paths=self.paths,
+                    retries=1,
+                ),
+            )
             return True
         except Exception:
             util.logexc(LOG, "Failed fetching metadata from url %s", url)
@@ -101,7 +108,6 @@ class DataSourceMAAS(sources.DataSource):
         ud, md, vd = data
         self.userdata_raw = ud
         self.metadata = md
-        self.vendordata_pure = vd
         if vd:
             try:
                 self.vendordata_raw = sources.convert_vendordata(vd)
@@ -109,37 +115,33 @@ class DataSourceMAAS(sources.DataSource):
                 LOG.warning("Invalid content in vendor-data: %s", e)
                 self.vendordata_raw = None
 
-    def wait_for_metadata_service(self, url):
-        mcfg = self.ds_cfg
-        max_wait = 120
-        try:
-            max_wait = int(mcfg.get("max_wait", max_wait))
-        except Exception:
-            util.logexc(LOG, "Failed to get max wait. using %s", max_wait)
+    def _get_subplatform(self):
+        """Return the subplatform metadata source details."""
+        return "seed-dir (%s)" % self.base_url
 
-        if max_wait == 0:
+    def wait_for_metadata_service(self, url):
+        url_params = self.get_url_params()
+        if url_params.max_wait_seconds == 0:
             return False
 
-        timeout = 50
-        try:
-            if timeout in mcfg:
-                timeout = int(mcfg.get("timeout", timeout))
-        except Exception:
-            LOG.warning("Failed to get timeout, using %s", timeout)
-
-        starttime = time.time()
-        if url.endswith("/"):
-            url = url[:-1]
+        starttime = time.monotonic()
+        url = url.rstrip("/")
         check_url = "%s/%s/meta-data/instance-id" % (url, MD_VERSION)
         urls = [check_url]
-        url = self.oauth_helper.wait_for_url(
-            urls=urls, max_wait=max_wait, timeout=timeout)
+        url, _response = self.oauth_helper.wait_for_url(
+            urls=urls,
+            max_wait=url_params.max_wait_seconds,
+            timeout=url_params.timeout_seconds,
+        )
 
         if url:
             LOG.debug("Using metadata source: '%s'", url)
         else:
-            LOG.critical("Giving up on md from %s after %i seconds",
-                         urls, int(time.time() - starttime))
+            LOG.critical(
+                "Giving up on md from %s after %i seconds",
+                urls,
+                int(time.monotonic() - starttime),
+            )
 
         return bool(url)
 
@@ -152,40 +154,64 @@ class DataSourceMAAS(sources.DataSource):
         if self.id_hash is None:
             return False
         ncfg = util.get_cfg_by_path(sys_cfg, ("datasource", self.dsname), {})
-        return (self.id_hash == get_id_from_ds_cfg(ncfg))
+        return self.id_hash == get_id_from_ds_cfg(ncfg)
+
+
+class DataSourceMAASLocal(DataSourceMAAS):
+    network_config_sources = (
+        NetworkConfigSource.CMD_LINE,
+        NetworkConfigSource.SYSTEM_CFG,
+        NetworkConfigSource.DS,
+        NetworkConfigSource.INITRAMFS,
+    )
+
+    def _get_data(self):
+        if not KlibcNetworkConfigSource().is_applicable():
+            # We booted from disk. Initramfs didn't bring up a network, so
+            # nothing to do. Wait until network timeframe to run _get_data()
+            LOG.debug("No initramfs applicable config")
+            return False
+        LOG.debug("Found initramfs applicable config")
+        return super()._get_data()
 
 
 def get_oauth_helper(cfg):
     """Return an oauth helper instance for values in cfg.
 
-       @raises ValueError from OauthUrlHelper if some required fields have
-               true-ish values but others do not."""
-    keys = ('consumer_key', 'consumer_secret', 'token_key', 'token_secret')
+    @raises ValueError from OauthUrlHelper if some required fields have
+    true-ish values but others do not."""
+    keys = ("consumer_key", "consumer_secret", "token_key", "token_secret")
     kwargs = dict([(r, cfg.get(r)) for r in keys])
     return url_helper.OauthUrlHelper(**kwargs)
 
 
 def get_id_from_ds_cfg(ds_cfg):
     """Given a config, generate a unique identifier for this node."""
-    fields = ('consumer_key', 'token_key', 'token_secret')
-    idstr = '\0'.join([ds_cfg.get(f, "") for f in fields])
+    fields = ("consumer_key", "token_key", "token_secret")
+    idstr = "\0".join([ds_cfg.get(f, "") for f in fields])
     # store the encoding version as part of the hash in the event
     # that it ever changed we can compute older versions.
-    return 'v1:' + hashlib.sha256(idstr.encode('utf-8')).hexdigest()
+    return "v1:" + hashlib.sha256(idstr.encode("utf-8")).hexdigest()
 
 
 def read_maas_seed_dir(seed_d):
     if seed_d.startswith("file://"):
         seed_d = seed_d[7:]
-    if not os.path.isdir(seed_d) or len(os.listdir(seed_d)) == 0:
+    if not os.path.isdir(seed_d) or not os.listdir(seed_d):
         raise MAASSeedDirNone("%s: not a directory")
 
     # seed_dir looks in seed_dir, not seed_dir/VERSION
     return read_maas_seed_url("file://%s" % seed_d, version=None)
 
 
-def read_maas_seed_url(seed_url, read_file_or_url=None, timeout=None,
-                       version=MD_VERSION, paths=None, retries=None):
+def read_maas_seed_url(
+    seed_url,
+    read_file_or_url=None,
+    timeout=None,
+    version=MD_VERSION,
+    paths=None,
+    retries=None,
+):
     """
     Read the maas datasource at seed_url.
       read_file_or_url is a method that should provide an interface
@@ -211,20 +237,25 @@ def read_maas_seed_url(seed_url, read_file_or_url=None, timeout=None,
             url = "%s/%s/%s" % (seed_url, version, path)
         try:
             ssl_details = util.fetch_ssl_details(paths)
-            resp = read_file_or_url(url, retries=retries, timeout=timeout,
-                                    ssl_details=ssl_details)
+            resp = read_file_or_url(
+                url, retries=retries, timeout=timeout, ssl_details=ssl_details
+            )
             if resp.ok():
                 if binary:
                     md[path] = resp.contents
                 else:
                     md[path] = util.decode_binary(resp.contents)
             else:
-                LOG.warning(("Fetching from %s resulted in"
-                             " an invalid http code %s"), url, resp.code)
+                LOG.warning(
+                    "Fetching from %s resulted in an invalid http code %s",
+                    url,
+                    resp.code,
+                )
         except url_helper.UrlError as e:
             if e.code == 404 and not optional:
                 raise MAASSeedDirMalformed(
-                    "Missing required %s: %s" % (path, e))
+                    "Missing required %s: %s" % (path, e)
+                ) from e
             elif e.code != 404:
                 raise e
 
@@ -233,8 +264,8 @@ def read_maas_seed_url(seed_url, read_file_or_url=None, timeout=None,
 
 def check_seed_contents(content, seed):
     """Validate if dictionary content valid as a return for a datasource.
-       Either return a (userdata, metadata, vendordata) tuple or
-       Raise MAASSeedDirMalformed or MAASSeedDirNone
+    Either return a (userdata, metadata, vendordata) tuple or
+    Raise MAASSeedDirMalformed or MAASSeedDirNone
     """
     ret = {}
     missing = []
@@ -252,21 +283,22 @@ def check_seed_contents(content, seed):
         else:
             ret[dpath] = content[spath]
 
-    if len(ret) == 0:
+    if not ret:
         raise MAASSeedDirNone("%s: no data files found" % seed)
 
     if missing:
         raise MAASSeedDirMalformed("%s: missing files %s" % (seed, missing))
 
     vd_data = None
-    if ret.get('vendor-data'):
+    if ret.get("vendor-data"):
         err = object()
-        vd_data = util.load_yaml(ret.get('vendor-data'), default=err,
-                                 allowed=(object))
+        vd_data = util.load_yaml(
+            ret.get("vendor-data"), default=err, allowed=(object)
+        )
         if vd_data is err:
             raise MAASSeedDirMalformed("vendor-data was not loadable as yaml.")
 
-    return ret.get('user-data'), ret.get('meta-data'), vd_data
+    return ret.get("user-data"), ret.get("meta-data"), vd_data
 
 
 class MAASSeedDirNone(Exception):
@@ -279,6 +311,7 @@ class MAASSeedDirMalformed(Exception):
 
 # Used to match classes to dependencies
 datasources = [
+    (DataSourceMAASLocal, (sources.DEP_FILESYSTEM,)),
     (DataSourceMAAS, (sources.DEP_FILESYSTEM, sources.DEP_NETWORK)),
 ]
 
@@ -289,6 +322,7 @@ def get_datasource_list(depends):
 
 
 if __name__ == "__main__":
+
     def main():
         """
         Call with single argument of directory or http or https url.
@@ -299,36 +333,66 @@ if __name__ == "__main__":
         import pprint
         import sys
 
-        parser = argparse.ArgumentParser(description='Interact with MAAS DS')
-        parser.add_argument("--config", metavar="file",
-                            help="specify DS config file", default=None)
-        parser.add_argument("--ckey", metavar="key",
-                            help="the consumer key to auth with", default=None)
-        parser.add_argument("--tkey", metavar="key",
-                            help="the token key to auth with", default=None)
-        parser.add_argument("--csec", metavar="secret",
-                            help="the consumer secret (likely '')", default="")
-        parser.add_argument("--tsec", metavar="secret",
-                            help="the token secret to auth with", default=None)
-        parser.add_argument("--apiver", metavar="version",
-                            help="the apiver to use ("" can be used)",
-                            default=MD_VERSION)
+        parser = argparse.ArgumentParser(description="Interact with MAAS DS")
+        parser.add_argument(
+            "--config",
+            metavar="file",
+            help="specify DS config file",
+            default=None,
+        )
+        parser.add_argument(
+            "--ckey",
+            metavar="key",
+            help="the consumer key to auth with",
+            default=None,
+        )
+        parser.add_argument(
+            "--tkey",
+            metavar="key",
+            help="the token key to auth with",
+            default=None,
+        )
+        parser.add_argument(
+            "--csec",
+            metavar="secret",
+            help="the consumer secret (likely '')",
+            default="",
+        )
+        parser.add_argument(
+            "--tsec",
+            metavar="secret",
+            help="the token secret to auth with",
+            default=None,
+        )
+        parser.add_argument(
+            "--apiver",
+            metavar="version",
+            help="the apiver to use ( can be used)",
+            default=MD_VERSION,
+        )
 
         subcmds = parser.add_subparsers(title="subcommands", dest="subcmd")
-        for (name, help) in (('crawl', 'crawl the datasource'),
-                             ('get', 'do a single GET of provided url'),
-                             ('check-seed', 'read and verify seed at url')):
+        for name, help in (
+            ("crawl", "crawl the datasource"),
+            ("get", "do a single GET of provided url"),
+            ("check-seed", "read and verify seed at url"),
+        ):
             p = subcmds.add_parser(name, help=help)
-            p.add_argument("url", help="the datasource url", nargs='?',
-                           default=None)
+            p.add_argument(
+                "url", help="the datasource url", nargs="?", default=None
+            )
 
         args = parser.parse_args()
 
-        creds = {'consumer_key': args.ckey, 'token_key': args.tkey,
-                 'token_secret': args.tsec, 'consumer_secret': args.csec}
+        creds = {
+            "consumer_key": args.ckey,
+            "token_key": args.tkey,
+            "token_secret": args.tsec,
+            "consumer_secret": args.csec,
+        }
 
         if args.config is None:
-            for fname in ('91_kernel_cmdline_url', '90_dpkg_maas'):
+            for fname in ("91_kernel_cmdline_url", "90_dpkg_maas"):
                 fpath = "/etc/cloud/cloud.cfg.d/" + fname + ".cfg"
                 if os.path.exists(fpath) and os.access(fpath, os.R_OK):
                     sys.stderr.write("Used config in %s.\n" % fpath)
@@ -336,13 +400,13 @@ if __name__ == "__main__":
 
         if args.config:
             cfg = util.read_conf(args.config)
-            if 'datasource' in cfg:
-                cfg = cfg['datasource']['MAAS']
+            if "datasource" in cfg:
+                cfg = cfg["datasource"]["MAAS"]
             for key in creds.keys():
                 if key in cfg and creds[key] is None:
                     creds[key] = cfg[key]
-            if args.url is None and 'metadata_url' in cfg:
-                args.url = cfg['metadata_url']
+            if args.url is None and "metadata_url" in cfg:
+                args.url = cfg["metadata_url"]
 
         if args.url is None:
             sys.stderr.write("Must provide a url or a config with url.\n")
@@ -377,8 +441,11 @@ if __name__ == "__main__":
                 (userdata, metadata, vd) = read_maas_seed_dir(args.url)
             else:
                 (userdata, metadata, vd) = read_maas_seed_url(
-                    args.url, version=args.apiver, read_file_or_url=readurl,
-                    retries=2)
+                    args.url,
+                    version=args.apiver,
+                    read_file_or_url=readurl,
+                    retries=2,
+                )
             print("=== user-data ===")
             print("N/A" if userdata is None else userdata.decode())
             print("=== meta-data ===")
@@ -395,5 +462,3 @@ if __name__ == "__main__":
             crawl(args.url)
 
     main()
-
-# vi: ts=4 expandtab

@@ -8,58 +8,35 @@
 #
 # This file is part of cloud-init. See LICENSE file for license information.
 
-from xml.dom import minidom
+"""Cloud-Init DataSource for OVF
+
+This module provides a cloud-init datasource for OVF data.
+"""
 
 import base64
+import logging
 import os
 import re
-import time
+from xml.dom import minidom  # nosec B408
 
-from cloudinit import log as logging
-from cloudinit import sources
-from cloudinit import util
+import yaml
 
-from cloudinit.sources.helpers.vmware.imc.config \
-    import Config
-from cloudinit.sources.helpers.vmware.imc.config_custom_script \
-    import PreCustomScript, PostCustomScript
-from cloudinit.sources.helpers.vmware.imc.config_file \
-    import ConfigFile
-from cloudinit.sources.helpers.vmware.imc.config_nic \
-    import NicConfigurator
-from cloudinit.sources.helpers.vmware.imc.config_passwd \
-    import PasswordConfigurator
-from cloudinit.sources.helpers.vmware.imc.guestcust_error \
-    import GuestCustErrorEnum
-from cloudinit.sources.helpers.vmware.imc.guestcust_event \
-    import GuestCustEventEnum as GuestCustEvent
-from cloudinit.sources.helpers.vmware.imc.guestcust_state \
-    import GuestCustStateEnum
-from cloudinit.sources.helpers.vmware.imc.guestcust_util import (
-    enable_nics,
-    get_nics_to_enable,
-    set_customization_status
-)
+from cloudinit import sources, subp, util
 
 LOG = logging.getLogger(__name__)
 
 
 class DataSourceOVF(sources.DataSource):
-
     dsname = "OVF"
 
     def __init__(self, sys_cfg, distro, paths):
         sources.DataSource.__init__(self, sys_cfg, distro, paths)
         self.seed = None
-        self.seed_dir = os.path.join(paths.seed_dir, 'ovf')
+        self.seed_dir = os.path.join(paths.seed_dir, "ovf")
         self.environment = None
         self.cfg = {}
         self.supported_seed_starts = ("/", "file://")
-        self.vmware_customization_supported = True
         self._network_config = None
-        self._vmware_nics_to_enable = None
-        self._vmware_cust_conf = None
-        self._vmware_cust_found = False
 
     def __str__(self):
         root = sources.DataSource.__str__(self)
@@ -69,8 +46,7 @@ class DataSourceOVF(sources.DataSource):
         found = []
         md = {}
         ud = ""
-        vmwareImcConfigFilePath = None
-        nicspath = None
+        vd = ""
 
         defaults = {
             "instance-id": "iid-dsovf",
@@ -78,189 +54,45 @@ class DataSourceOVF(sources.DataSource):
 
         (seedfile, contents) = get_ovf_env(self.paths.seed_dir)
 
-        system_type = util.read_dmi_data("system-product-name")
-        if system_type is None:
-            LOG.debug("No system-product-name found")
-
         if seedfile:
             # Found a seed dir
             seed = os.path.join(self.paths.seed_dir, seedfile)
             (md, ud, cfg) = read_ovf_environment(contents)
             self.environment = contents
             found.append(seed)
-        elif system_type and 'vmware' in system_type.lower():
-            LOG.debug("VMware Virtualization Platform found")
-            if not self.vmware_customization_supported:
-                LOG.debug("Skipping the check for "
-                          "VMware Customization support")
-            elif not util.get_cfg_option_bool(
-                    self.sys_cfg, "disable_vmware_customization", True):
-
-                search_paths = (
-                    "/usr/lib/vmware-tools", "/usr/lib64/vmware-tools",
-                    "/usr/lib/open-vm-tools", "/usr/lib64/open-vm-tools")
-
-                plugin = "libdeployPkgPlugin.so"
-                deployPkgPluginPath = None
-                for path in search_paths:
-                    deployPkgPluginPath = search_file(path, plugin)
-                    if deployPkgPluginPath:
-                        LOG.debug("Found the customization plugin at %s",
-                                  deployPkgPluginPath)
-                        break
-
-                if deployPkgPluginPath:
-                    # When the VM is powered on, the "VMware Tools" daemon
-                    # copies the customization specification file to
-                    # /var/run/vmware-imc directory. cloud-init code needs
-                    # to search for the file in that directory.
-                    max_wait = get_max_wait_from_cfg(self.ds_cfg)
-                    vmwareImcConfigFilePath = util.log_time(
-                        logfunc=LOG.debug,
-                        msg="waiting for configuration file",
-                        func=wait_for_imc_cfg_file,
-                        args=("cust.cfg", max_wait))
-                else:
-                    LOG.debug("Did not find the customization plugin.")
-
-                if vmwareImcConfigFilePath:
-                    LOG.debug("Found VMware Customization Config File at %s",
-                              vmwareImcConfigFilePath)
-                    nicspath = wait_for_imc_cfg_file(
-                        filename="nics.txt", maxwait=10, naplen=5)
-                else:
-                    LOG.debug("Did not find VMware Customization Config File")
-            else:
-                LOG.debug("Customization for VMware platform is disabled.")
-
-        if vmwareImcConfigFilePath:
-            self._vmware_nics_to_enable = ""
-            try:
-                cf = ConfigFile(vmwareImcConfigFilePath)
-                self._vmware_cust_conf = Config(cf)
-                (md, ud, cfg) = read_vmware_imc(self._vmware_cust_conf)
-                self._vmware_nics_to_enable = get_nics_to_enable(nicspath)
-                imcdirpath = os.path.dirname(vmwareImcConfigFilePath)
-                product_marker = self._vmware_cust_conf.marker_id
-                hasmarkerfile = check_marker_exists(
-                    product_marker, os.path.join(self.paths.cloud_dir, 'data'))
-                special_customization = product_marker and not hasmarkerfile
-                customscript = self._vmware_cust_conf.custom_script_name
-            except Exception as e:
-                _raise_error_status(
-                    "Error parsing the customization Config File",
-                    e,
-                    GuestCustEvent.GUESTCUST_EVENT_CUSTOMIZE_FAILED,
-                    vmwareImcConfigFilePath)
-
-            if special_customization:
-                if customscript:
-                    try:
-                        precust = PreCustomScript(customscript, imcdirpath)
-                        precust.execute()
-                    except Exception as e:
-                        _raise_error_status(
-                            "Error executing pre-customization script",
-                            e,
-                            GuestCustEvent.GUESTCUST_EVENT_CUSTOMIZE_FAILED,
-                            vmwareImcConfigFilePath)
-
-            try:
-                LOG.debug("Preparing the Network configuration")
-                self._network_config = get_network_config_from_conf(
-                    self._vmware_cust_conf,
-                    True,
-                    True,
-                    self.distro.osfamily)
-            except Exception as e:
-                _raise_error_status(
-                    "Error preparing Network Configuration",
-                    e,
-                    GuestCustEvent.GUESTCUST_EVENT_NETWORK_SETUP_FAILED,
-                    vmwareImcConfigFilePath)
-
-            if special_customization:
-                LOG.debug("Applying password customization")
-                pwdConfigurator = PasswordConfigurator()
-                adminpwd = self._vmware_cust_conf.admin_password
-                try:
-                    resetpwd = self._vmware_cust_conf.reset_password
-                    if adminpwd or resetpwd:
-                        pwdConfigurator.configure(adminpwd, resetpwd,
-                                                  self.distro)
-                    else:
-                        LOG.debug("Changing password is not needed")
-                except Exception as e:
-                    _raise_error_status(
-                        "Error applying Password Configuration",
-                        e,
-                        GuestCustEvent.GUESTCUST_EVENT_CUSTOMIZE_FAILED,
-                        vmwareImcConfigFilePath)
-
-                if customscript:
-                    try:
-                        postcust = PostCustomScript(customscript, imcdirpath)
-                        postcust.execute()
-                    except Exception as e:
-                        _raise_error_status(
-                            "Error executing post-customization script",
-                            e,
-                            GuestCustEvent.GUESTCUST_EVENT_CUSTOMIZE_FAILED,
-                            vmwareImcConfigFilePath)
-
-            if product_marker:
-                try:
-                    setup_marker_files(
-                        product_marker,
-                        os.path.join(self.paths.cloud_dir, 'data'))
-                except Exception as e:
-                    _raise_error_status(
-                        "Error creating marker files",
-                        e,
-                        GuestCustEvent.GUESTCUST_EVENT_CUSTOMIZE_FAILED,
-                        vmwareImcConfigFilePath)
-
-            self._vmware_cust_found = True
-            found.append('vmware-tools')
-
-            # TODO: Need to set the status to DONE only when the
-            # customization is done successfully.
-            util.del_dir(os.path.dirname(vmwareImcConfigFilePath))
-            enable_nics(self._vmware_nics_to_enable)
-            set_customization_status(
-                GuestCustStateEnum.GUESTCUST_STATE_DONE,
-                GuestCustErrorEnum.GUESTCUST_ERROR_SUCCESS)
-
         else:
-            np = {'iso': transport_iso9660,
-                  'vmware-guestd': transport_vmware_guestd, }
+            np = [
+                ("com.vmware.guestInfo", transport_vmware_guestinfo),
+                ("iso", transport_iso9660),
+            ]
             name = None
-            for (name, transfunc) in np.items():
-                (contents, _dev, _fname) = transfunc()
+            for name, transfunc in np:
+                contents = transfunc()
                 if contents:
                     break
             if contents:
-                (md, ud, cfg) = read_ovf_environment(contents)
+                (md, ud, cfg) = read_ovf_environment(contents, True)
                 self.environment = contents
+                if "network-config" in md and md["network-config"]:
+                    self._network_config = md["network-config"]
                 found.append(name)
 
         # There was no OVF transports found
-        if len(found) == 0:
+        if not found:
             return False
 
-        if 'seedfrom' in md and md['seedfrom']:
-            seedfrom = md['seedfrom']
+        if "seedfrom" in md and md["seedfrom"]:
+            seedfrom = md["seedfrom"]
             seedfound = False
             for proto in self.supported_seed_starts:
                 if seedfrom.startswith(proto):
                     seedfound = proto
                     break
             if not seedfound:
-                LOG.debug("Seed from %s not supported by %s",
-                          seedfrom, self)
+                LOG.debug("Seed from %s not supported by %s", seedfrom, self)
                 return False
 
-            (md_seed, ud) = util.read_seeded(seedfrom, timeout=None)
+            (md_seed, ud, vd, _) = util.read_seeded(seedfrom, timeout=None)
             LOG.debug("Using seeded cache data from %s", seedfrom)
 
             md = util.mergemanydict([md, md_seed])
@@ -272,13 +104,17 @@ class DataSourceOVF(sources.DataSource):
         self.seed = ",".join(found)
         self.metadata = md
         self.userdata_raw = ud
+        self.vendordata_raw = vd
         self.cfg = cfg
         return True
 
+    def _get_subplatform(self):
+        return "ovf (%s)" % self.seed
+
     def get_public_ssh_keys(self):
-        if 'public-keys' not in self.metadata:
+        if "public-keys" not in self.metadata:
             return []
-        pks = self.metadata['public-keys']
+        pks = self.metadata["public-keys"]
         if isinstance(pks, (list)):
             return pks
         else:
@@ -298,104 +134,33 @@ class DataSourceOVF(sources.DataSource):
 class DataSourceOVFNet(DataSourceOVF):
     def __init__(self, sys_cfg, distro, paths):
         DataSourceOVF.__init__(self, sys_cfg, distro, paths)
-        self.seed_dir = os.path.join(paths.seed_dir, 'ovf-net')
-        self.supported_seed_starts = ("http://", "https://", "ftp://")
-        self.vmware_customization_supported = False
-
-
-def get_max_wait_from_cfg(cfg):
-    default_max_wait = 90
-    max_wait_cfg_option = 'vmware_cust_file_max_wait'
-    max_wait = default_max_wait
-
-    if not cfg:
-        return max_wait
-
-    try:
-        max_wait = int(cfg.get(max_wait_cfg_option, default_max_wait))
-    except ValueError:
-        LOG.warning("Failed to get '%s', using %s",
-                    max_wait_cfg_option, default_max_wait)
-
-    if max_wait <= 0:
-        LOG.warning("Invalid value '%s' for '%s', using '%s' instead",
-                    max_wait, max_wait_cfg_option, default_max_wait)
-        max_wait = default_max_wait
-
-    return max_wait
-
-
-def wait_for_imc_cfg_file(filename, maxwait=180, naplen=5,
-                          dirpath="/var/run/vmware-imc"):
-    waited = 0
-
-    while waited < maxwait:
-        fileFullPath = os.path.join(dirpath, filename)
-        if os.path.isfile(fileFullPath):
-            return fileFullPath
-        LOG.debug("Waiting for VMware Customization Config File")
-        time.sleep(naplen)
-        waited += naplen
-    return None
-
-
-def get_network_config_from_conf(config, use_system_devices=True,
-                                 configure=False, osfamily=None):
-    nicConfigurator = NicConfigurator(config.nics, use_system_devices)
-    nics_cfg_list = nicConfigurator.generate(configure, osfamily)
-
-    return get_network_config(nics_cfg_list,
-                              config.name_servers,
-                              config.dns_suffixes)
-
-
-def get_network_config(nics=None, nameservers=None, search=None):
-    config_list = nics
-
-    if nameservers or search:
-        config_list.append({'type': 'nameserver', 'address': nameservers,
-                            'search': search})
-
-    return {'version': 1, 'config': config_list}
+        self.seed_dir = os.path.join(paths.seed_dir, "ovf-net")
+        self.supported_seed_starts = ("http://", "https://")
 
 
 # This will return a dict with some content
 #  meta-data, user-data, some config
-def read_vmware_imc(config):
-    md = {}
-    cfg = {}
-    ud = None
-    if config.host_name:
-        if config.domain_name:
-            md['local-hostname'] = config.host_name + "." + config.domain_name
-        else:
-            md['local-hostname'] = config.host_name
-
-    if config.timezone:
-        cfg['timezone'] = config.timezone
-
-    # Generate a unique instance-id so that re-customization will
-    # happen in cloud-init
-    md['instance-id'] = "iid-vmware-" + util.rand_str(strlen=8)
-    return (md, ud, cfg)
-
-
-# This will return a dict with some content
-#  meta-data, user-data, some config
-def read_ovf_environment(contents):
+def read_ovf_environment(contents, read_network=False):
     props = get_properties(contents)
     md = {}
     cfg = {}
     ud = None
-    cfg_props = ['password']
-    md_props = ['seedfrom', 'local-hostname', 'public-keys', 'instance-id']
-    for (prop, val) in props.items():
-        if prop == 'hostname':
+    cfg_props = ["password"]
+    md_props = ["seedfrom", "local-hostname", "public-keys", "instance-id"]
+    network_props = ["network-config"]
+    for prop, val in props.items():
+        if prop == "hostname":
             prop = "local-hostname"
         if prop in md_props:
             md[prop] = val
         elif prop in cfg_props:
             cfg[prop] = val
+        elif prop in network_props and read_network:
+            try:
+                network_config = base64.b64decode(val.encode())
+                md[prop] = safeload_yaml_or_dict(network_config).get("network")
+            except Exception:
+                LOG.debug("Ignore network-config in wrong format")
         elif prop == "user-data":
             try:
                 ud = base64.b64decode(val.encode())
@@ -412,7 +177,7 @@ def get_ovf_env(dirname):
         full_fn = os.path.join(dirname, fname)
         if os.path.isfile(full_fn):
             try:
-                contents = util.load_file(full_fn)
+                contents = util.load_text_file(full_fn)
                 return (fname, contents)
             except Exception:
                 util.logexc(LOG, "Failed loading ovf file %s", full_fn)
@@ -428,7 +193,7 @@ def maybe_cdrom_device(devname):
     """
     if not devname:
         return False
-    elif not isinstance(devname, util.string_types):
+    elif not isinstance(devname, str):
         raise ValueError("Unexpected input for devname: %s" % devname)
 
     # resolve '..' and multi '/' elements
@@ -458,22 +223,21 @@ def maybe_cdrom_device(devname):
     return cdmatch.match(devname) is not None
 
 
-# Transport functions take no input and return
-# a 3 tuple of content, path, filename
+# Transport functions are called with no arguments and return
+# either None (indicating not present) or string content of an ovf-env.xml
 def transport_iso9660(require_iso=True):
-
     # Go through mounts to see if it was already mounted
     mounts = util.mounts()
-    for (dev, info) in mounts.items():
-        fstype = info['fstype']
+    for dev, info in mounts.items():
+        fstype = info["fstype"]
         if fstype != "iso9660" and require_iso:
             continue
         if not maybe_cdrom_device(dev):
             continue
-        mp = info['mountpoint']
-        (fname, contents) = get_ovf_env(mp)
+        mp = info["mountpoint"]
+        (_fname, contents) = get_ovf_env(mp)
         if contents is not False:
-            return (contents, dev, fname)
+            return contents
 
     if require_iso:
         mtype = "iso9660"
@@ -481,34 +245,105 @@ def transport_iso9660(require_iso=True):
         mtype = None
 
     # generate a list of devices with mtype filesystem, filter by regex
-    devs = [dev for dev in
-            util.find_devs_with("TYPE=%s" % mtype if mtype else None)
-            if maybe_cdrom_device(dev)]
+    devs = [
+        dev
+        for dev in util.find_devs_with("TYPE=%s" % mtype if mtype else None)
+        if maybe_cdrom_device(dev)
+    ]
     for dev in devs:
         try:
-            (fname, contents) = util.mount_cb(dev, get_ovf_env, mtype=mtype)
+            (_fname, contents) = util.mount_cb(dev, get_ovf_env, mtype=mtype)
         except util.MountFailedError:
             LOG.debug("%s not mountable as iso9660", dev)
             continue
 
         if contents is not False:
-            return (contents, dev, fname)
+            return contents
 
-    return (False, None, None)
+    return None
 
 
-def transport_vmware_guestd():
-    # http://blogs.vmware.com/vapp/2009/07/ \
-    #    selfconfiguration-and-the-ovf-environment.html
-    # try:
-    #     cmd = ['vmware-guestd', '--cmd', 'info-get guestinfo.ovfEnv']
-    #     (out, err) = subp(cmd)
-    #     return(out, 'guestinfo.ovfEnv', 'vmware-guestd')
-    # except:
-    #     # would need to error check here and see why this failed
-    #     # to know if log/error should be raised
-    #     return(False, None, None)
-    return (False, None, None)
+def exec_vmware_rpctool(rpctool, arg):
+    cmd = [rpctool, arg]
+    (stdout, stderr) = subp.subp(cmd)
+    return (cmd, stdout, stderr)
+
+
+def exec_vmtoolsd(rpctool, arg):
+    cmd = [rpctool, "--cmd", arg]
+    (stdout, stderr) = subp.subp(cmd)
+    return (cmd, stdout, stderr)
+
+
+def transport_vmware_guestinfo():
+    rpctool, rpctool_fn = None, None
+    vmtoolsd = subp.which("vmtoolsd")
+    vmware_rpctool = subp.which("vmware-rpctool")
+
+    # Default to using vmware-rpctool if it is available.
+    if vmware_rpctool:
+        rpctool, rpctool_fn = vmware_rpctool, exec_vmware_rpctool
+        LOG.debug("discovered vmware-rpctool: %s", vmware_rpctool)
+
+    if vmtoolsd:
+        # Default to using vmtoolsd if it is available and vmware-rpctool is
+        # not.
+        if not vmware_rpctool:
+            rpctool, rpctool_fn = vmtoolsd, exec_vmtoolsd
+        LOG.debug("discovered vmtoolsd: %s", vmtoolsd)
+
+    # If neither vmware-rpctool nor vmtoolsd are available, then nothing can
+    # be done.
+    if not rpctool:
+        LOG.debug("no rpctool discovered")
+        return None
+
+    def query_guestinfo(rpctool, rpctool_fn):
+        LOG.info("query guestinfo.ovfEnv with %s", rpctool)
+        try:
+            cmd, stdout, _ = rpctool_fn(rpctool, "info-get guestinfo.ovfEnv")
+            if stdout:
+                return stdout
+            LOG.debug("cmd %s exited 0 with empty stdout", cmd)
+            return None
+        except subp.ProcessExecutionError as error:
+            if error.exit_code != 1:
+                LOG.warning("%s exited with code %d", rpctool, error.exit_code)
+            raise error
+
+    try:
+        # The first attempt to query guestinfo could occur via either
+        # vmware-rpctool *or* vmtoolsd.
+        return query_guestinfo(rpctool, rpctool_fn)
+    except subp.ProcessExecutionError as error:
+        # The second attempt to query guestinfo can only occur with
+        # vmtoolsd.
+
+        # If the first attempt at getting the data was with vmtoolsd, then
+        # no second attempt is made.
+        if vmtoolsd and rpctool == vmtoolsd:
+            # The fallback failed and exit code is not 1, log the error.
+            if error.exit_code != 1:
+                util.logexc(
+                    LOG, "vmtoolsd failed to get guestinfo.ovfEnv: %s", error
+                )
+            return None
+
+        if not vmtoolsd:
+            LOG.info("vmtoolsd fallback option not present")
+            return None
+
+        try:
+            LOG.info("fallback to vmtoolsd")
+            return query_guestinfo(vmtoolsd, exec_vmtoolsd)
+        except subp.ProcessExecutionError as error:
+            # The fallback failed and exit code is not 1, log the error.
+            if error.exit_code != 1:
+                util.logexc(
+                    LOG, "vmtoolsd failed to get guestinfo.ovfEnv: %s", error
+                )
+
+    return None
 
 
 def find_child(node, filter_func):
@@ -522,8 +357,7 @@ def find_child(node, filter_func):
 
 
 def get_properties(contents):
-
-    dom = minidom.parseString(contents)
+    dom = minidom.parseString(contents)  # nosec B318
     if dom.documentElement.localName != "Environment":
         raise XmlError("No Environment Node")
 
@@ -534,15 +368,17 @@ def get_properties(contents):
 
     # could also check here that elem.namespaceURI ==
     #   "http://schemas.dmtf.org/ovf/environment/1"
-    propSections = find_child(dom.documentElement,
-                              lambda n: n.localName == "PropertySection")
+    propSections = find_child(
+        dom.documentElement, lambda n: n.localName == "PropertySection"
+    )
 
-    if len(propSections) == 0:
+    if not propSections:
         raise XmlError("No 'PropertySection's")
 
     props = {}
-    propElems = find_child(propSections[0],
-                           (lambda n: n.localName == "Property"))
+    propElems = find_child(
+        propSections[0], (lambda n: n.localName == "Property")
+    )
 
     for elem in propElems:
         key = elem.attributes.getNamedItemNS(envNsURI, "key").value
@@ -552,24 +388,13 @@ def get_properties(contents):
     return props
 
 
-def search_file(dirpath, filename):
-    if not dirpath or not filename:
-        return None
-
-    for root, _dirs, files in os.walk(dirpath):
-        if filename in files:
-            return os.path.join(root, filename)
-
-    return None
-
-
 class XmlError(Exception):
     pass
 
 
 # Used to match classes to dependencies
 datasources = (
-    (DataSourceOVF, (sources.DEP_FILESYSTEM, )),
+    (DataSourceOVF, (sources.DEP_FILESYSTEM,)),
     (DataSourceOVFNet, (sources.DEP_FILESYSTEM, sources.DEP_NETWORK)),
 )
 
@@ -579,53 +404,12 @@ def get_datasource_list(depends):
     return sources.list_from_depends(depends, datasources)
 
 
-# To check if marker file exists
-def check_marker_exists(markerid, marker_dir):
+def safeload_yaml_or_dict(data):
     """
-    Check the existence of a marker file.
-    Presence of marker file determines whether a certain code path is to be
-    executed. It is needed for partial guest customization in VMware.
-    @param markerid: is an unique string representing a particular product
-                     marker.
-    @param: marker_dir: The directory in which markers exist.
+    The meta data could be JSON or YAML. Since YAML is a strict superset of
+    JSON, we will unmarshal the data as YAML. If data is None then a new
+    dictionary is returned.
     """
-    if not markerid:
-        return False
-    markerfile = os.path.join(marker_dir, ".markerfile-" + markerid + ".txt")
-    if os.path.exists(markerfile):
-        return True
-    return False
-
-
-# Create a marker file
-def setup_marker_files(markerid, marker_dir):
-    """
-    Create a new marker file.
-    Marker files are unique to a full customization workflow in VMware
-    environment.
-    @param markerid: is an unique string representing a particular product
-                     marker.
-    @param: marker_dir: The directory in which markers exist.
-
-    """
-    LOG.debug("Handle marker creation")
-    markerfile = os.path.join(marker_dir, ".markerfile-" + markerid + ".txt")
-    for fname in os.listdir(marker_dir):
-        if fname.startswith(".markerfile"):
-            util.del_file(os.path.join(marker_dir, fname))
-    open(markerfile, 'w').close()
-
-
-def _raise_error_status(prefix, error, event, config_file):
-    """
-    Raise error and send customization status to the underlying VMware
-    Virtualization Platform. Also, cleanup the imc directory.
-    """
-    LOG.debug('%s: %s', prefix, error)
-    set_customization_status(
-        GuestCustStateEnum.GUESTCUST_STATE_RUNNING,
-        event)
-    util.del_dir(os.path.dirname(config_file))
-    raise error
-
-# vi: ts=4 expandtab
+    if not data:
+        return {}
+    return yaml.safe_load(data)

@@ -5,9 +5,45 @@ dist
 __pycache__
 .tox
 .coverage
+.coverage.*
+.python-version
 doc/rtd_html
 parts
 prime
 stage
 *.snap
 *.cover
+.idea/
+.venv/
+.pc/
+.cache/
+.mypy_cache/
+.pytest_cache/
+.vscode/
+htmlcov/
+tags
+.hypothesis/
+
+# Ignore packaging artifacts
+cloud-init.dsc
+cloud-init_*.build
+cloud-init_*.buildinfo
+cloud-init_*.changes
+cloud-init_*.deb
+cloud-init_*.dsc
+cloud-init_*.tar.gz
+cloud-init_*.tar.xz
+cloud-init_*.upload
+
+# user test settings
+tests/integration_tests/user_settings.py
+
+# debhelper output. DANOS builds in place, so these land next to the sources.
+/.pybuild/
+/debian/.debhelper/
+/debian/files
+/debian/debhelper-build-stamp
+/debian/*.substvars
+/debian/*.debhelper.log
+/debian/*.debhelper
+/debian/cloud-init/

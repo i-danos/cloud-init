@@ -1,6 +1,6 @@
 ## template:jinja
 {#
-This file is only utilized if the module 'cc_chef' is enabled in 
+This file is only utilized if the module 'cc_chef' is enabled in
 cloud-config. Specifically, in order to enable it
 you need to add the following to config:
   chef:
@@ -14,6 +14,9 @@ you need to add the following to config:
 The reason these are not in quotes is because they are ruby
 symbols that will be placed inside here, and not actual strings...
 #}
+{% if chef_license %}
+chef_license           "{{chef_license}}"
+{% endif%}
 {% if log_level %}
 log_level              {{log_level}}
 {% endif %}
@@ -55,4 +58,7 @@ pid_file               "{{pid_file}}"
 {% endif %}
 {% if show_time %}
 Chef::Log::Formatter.show_time = true
+{% endif %}
+{% if encrypted_data_bag_secret %}
+encrypted_data_bag_secret "{{encrypted_data_bag_secret}}"
 {% endif %}

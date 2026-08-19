@@ -1,3 +1,4 @@
+#cloud-config
 # apt_pipelining (configure Acquire::http::Pipeline-Depth)
 # Default: disables HTTP pipelining. Certain web servers, such
 # as S3 do not pipeline properly (LP: #948461).
@@ -7,34 +8,11 @@
 #   Number: Set pipelining to some number (not recommended)
 apt_pipelining: False
 
-## apt config via system_info:
-# under the 'system_info', you can customize cloud-init's interaction
-# with apt.
-#  system_info:
-#    apt_get_command: [command, argument, argument]
-#    apt_get_upgrade_subcommand: dist-upgrade
-#
-# apt_get_command:
-#  To specify a different 'apt-get' command, set 'apt_get_command'.
-#  This must be a list, and the subcommand (update, upgrade) is appended to it.
-#  default is:
-#    ['apt-get', '--option=Dpkg::Options::=--force-confold',
-#     '--option=Dpkg::options::=--force-unsafe-io', '--assume-yes', '--quiet']
-#
-# apt_get_upgrade_subcommand: "dist-upgrade"
-#  Specify a different subcommand for 'upgrade. The default is 'dist-upgrade'.
-#  This is the subcommand that is invoked for package_upgrade.
-#
-# apt_get_wrapper:
-#   command: eatmydata
-#   enabled: [True, False, "auto"]
-#
-
 # Install additional packages on first boot
 #
 # Default: none
 #
-# if packages are specified, this apt_update will be set to true
+# if packages are specified, then package_update will be set to true
 
 packages: ['pastebinit']
 
@@ -91,7 +69,7 @@ apt:
 
   # 1.3 primary/security archives
   #
-  # Default: none - instead it is auto select based on cloud metadata
+  # Default: none - instead it is auto select based on instance-data
   # so if neither "uri" nor "search", nor "search_dns" is set (the default)
   # then use the mirror provided by the DataSource found.
   # In EC2, that means using <region>.ec2.archive.ubuntu.com
@@ -118,7 +96,7 @@ apt:
         - http://us.archive.ubuntu.com/ubuntu
       # if no mirror is provided by uri or search but 'search_dns' is
       # true, then search for dns names '<distro>-mirror' in each of
-      # - fqdn of this host per cloud metadata
+      # - fqdn of this host per meta-data
       # - localdomain
       # - no domain (which would search domains listed in /etc/resolv.conf)
       # If there is a dns entry for <distro>-mirror, then it is assumed that
@@ -137,11 +115,18 @@ apt:
       # the first defining a valid mirror wins (in the order as defined here,
       # not the order as listed in the config).
       #
+      # Additionally, if the repository requires a custom signing key, it can be
+      # specified via the same fields as for custom sources:
+      #   'keyid': providing a key to import via shortid or fingerprint
+      #   'key': providing a raw PGP key
+      #   'keyserver': specify an alternate keyserver to pull keys from that
+      #                were specified by keyid
     - arches: [s390x, arm64]
       # as above, allowing to have one config for different per arch mirrors
   # security is optional, if not defined it is set to the same value as primary
   security:
-      uri: http://security.ubuntu.com/ubuntu
+    - uri: http://security.ubuntu.com/ubuntu
+      arches: [default]
   # If search_dns is set for security the searched pattern is:
   #   <distro>-security-mirror
 
@@ -205,14 +190,14 @@ apt:
   #
   # The key of each source entry is the filename and will be prepended by
   # /etc/apt/sources.list.d/ if it doesn't start with a '/'.
-  # If it doesn't end with .list it will be appended so that apt picks up it's
+  # If it doesn't end with .list it will be appended so that apt picks up its
   # configuration.
   #
   # Whenever there is no content to be written into such a file, the key is
   # not used as filename - yet it can still be used as index for merging
   # configuration.
   #
-  # The values inside the entries consost of the following optional entries:
+  # The values inside the entries consist of the following optional entries:
   #   'source': a sources.list entry (some variable replacements apply)
   #   'keyid': providing a key to import via shortid or fingerprint
   #   'key': providing a raw PGP key
@@ -222,19 +207,19 @@ apt:
   # This allows merging between multiple input files than a list like:
   # cloud-config1
   # sources:
-  #    s1: {'key': 'key1', 'source': 'source1'}
+  #   s1: {'key': 'key1', 'source': 'source1'}
   # cloud-config2
   # sources:
-  #    s2: {'key': 'key2'}
-  #    s1: {'keyserver': 'foo'}
+  #   s2: {'key': 'key2'}
+  #   s1: {'keyserver': 'foo'}
   # This would be merged to
   # sources:
-  #    s1:
-  #        keyserver: foo
-  #        key: key1
-  #        source: source1
-  #    s2:
-  #        key: key2
+  #   s1:
+  #     keyserver: foo
+  #     key: key1
+  #     source: source1
+  #   s2:
+  #     key: key2
   #
   # The following examples number the subfeatures per sources entry to ease
   # identification in discussions.
@@ -246,7 +231,7 @@ apt:
       #
       # Creates a file in /etc/apt/sources.list.d/ for the sources list entry
       # based on the key: "/etc/apt/sources.list.d/curtin-dev-ppa.list"
-      source: "deb http://ppa.launchpad.net/curtin-dev/test-archive/ubuntu xenial main"
+      source: "deb http://ppa.launchpad.net/curtin-dev/test-archive/ubuntu bionic main"
 
       # 2.2 keyid
       #
@@ -269,17 +254,18 @@ apt:
     my-repo2.list:
       # 2.4 replacement variables
       #
-      # sources can use $MIRROR, $PRIMARY, $SECURITY and $RELEASE replacement
-      # variables.
+      # sources can use $MIRROR, $PRIMARY, $SECURITY, $RELEASE and $KEY_FILE
+      # replacement variables.
       # They will be replaced with the default or specified mirrors and the
       # running release.
       # The entry below would be possibly turned into:
-      #   source: deb http://archive.ubuntu.com/ubuntu xenial multiverse
-      source: deb $MIRROR $RELEASE multiverse
+      #   source: deb http://archive.ubuntu.com/ubuntu bionic multiverse
+      source: deb [signed-by=$KEY_FILE] $MIRROR $RELEASE multiverse
+      keyid: F430BBA5
 
     my-repo3.list:
       # this would have the same end effect as 'ppa:curtin-dev/test-archive'
-      source: "deb http://ppa.launchpad.net/curtin-dev/test-archive/ubuntu xenial main"
+      source: "deb http://ppa.launchpad.net/curtin-dev/test-archive/ubuntu bionic main"
       keyid: F430BBA5 # GPG key ID published on the key server
       filename: curtin-dev-ppa.list
 
@@ -303,9 +289,19 @@ apt:
       keyid: B59D 5F15 97A5 04B7 E230  6DCA 0620 BBCF 0368 3F77
       keyserver: pgp.mit.edu
 
+    ignored5:
+      # 2.8 signed-by
+      #
+      # One can specify [signed-by=$KEY_FILE] in the source definition, which
+      # will make the key be installed in the directory /etc/cloud-init.gpg.d/
+      # and the $KEY_FILE replacement variable will be replaced with the path
+      # to the specified key. If $KEY_FILE is used, but no key is specified,
+      # apt update will (rightfully) fail due to an invalid value.
+      source: deb [signed-by=$KEY_FILE] $MIRROR $RELEASE multiverse
+      keyid: B59D 5F15 97A5 04B7 E230  6DCA 0620 BBCF 0368 3F77
 
     my-repo4.list:
-      # 2.8 raw key
+      # 2.9 raw key
       #
       # The apt signing key can also be specified by providing a pgp public key
       # block. Providing the PGP key this way is the most robust method for
@@ -314,15 +310,15 @@ apt:
       # As with keyid's this can be specified with or without some actual source
       # content.
       key: | # The value needs to start with -----BEGIN PGP PUBLIC KEY BLOCK-----
-         -----BEGIN PGP PUBLIC KEY BLOCK-----
-         Version: SKS 1.0.10
+        -----BEGIN PGP PUBLIC KEY BLOCK-----
+        Version: SKS 1.0.10
 
-         mI0ESpA3UQEEALdZKVIMq0j6qWAXAyxSlF63SvPVIgxHPb9Nk0DZUixn+akqytxG4zKCONz6
-         qLjoBBfHnynyVLfT4ihg9an1PqxRnTO+JKQxl8NgKGz6Pon569GtAOdWNKw15XKinJTDLjnj
-         9y96ljJqRcpV9t/WsIcdJPcKFR5voHTEoABE2aEXABEBAAG0GUxhdW5jaHBhZCBQUEEgZm9y
-         IEFsZXN0aWOItgQTAQIAIAUCSpA3UQIbAwYLCQgHAwIEFQIIAwQWAgMBAh4BAheAAAoJEA7H
-         5Qi+CcVxWZ8D/1MyYvfj3FJPZUm2Yo1zZsQ657vHI9+pPouqflWOayRR9jbiyUFIn0VdQBrP
-         t0FwvnOFArUovUWoKAEdqR8hPy3M3APUZjl5K4cMZR/xaMQeQRZ5CHpS4DBKURKAHC0ltS5o
-         uBJKQOZm5iltJp15cgyIkBkGe8Mx18VFyVglAZey
-         =Y2oI
-         -----END PGP PUBLIC KEY BLOCK-----
+        mI0ESpA3UQEEALdZKVIMq0j6qWAXAyxSlF63SvPVIgxHPb9Nk0DZUixn+akqytxG4zKCONz6
+        qLjoBBfHnynyVLfT4ihg9an1PqxRnTO+JKQxl8NgKGz6Pon569GtAOdWNKw15XKinJTDLjnj
+        9y96ljJqRcpV9t/WsIcdJPcKFR5voHTEoABE2aEXABEBAAG0GUxhdW5jaHBhZCBQUEEgZm9y
+        IEFsZXN0aWOItgQTAQIAIAUCSpA3UQIbAwYLCQgHAwIEFQIIAwQWAgMBAh4BAheAAAoJEA7H
+        5Qi+CcVxWZ8D/1MyYvfj3FJPZUm2Yo1zZsQ657vHI9+pPouqflWOayRR9jbiyUFIn0VdQBrP
+        t0FwvnOFArUovUWoKAEdqR8hPy3M3APUZjl5K4cMZR/xaMQeQRZ5CHpS4DBKURKAHC0ltS5o
+        uBJKQOZm5iltJp15cgyIkBkGe8Mx18VFyVglAZey
+        =Y2oI
+        -----END PGP PUBLIC KEY BLOCK-----

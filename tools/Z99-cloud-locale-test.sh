@@ -11,11 +11,14 @@
 #  of how to fix them.
 
 locale_warn() {
-    local bad_names="" bad_lcs="" key="" val="" var="" vars="" bad_kv=""
-    local w1 w2 w3 w4 remain
+    command -v local >/dev/null && local _local="local" ||
+        typeset _local="typeset"
+
+    $_local bad_names="" bad_lcs="" key="" val="" var="" vars="" bad_kv=""
+    $_local w1 w2 w3 w4 remain
 
     # if shell is zsh, act like sh only for this function (-L).
-    # The behavior change will not permenently affect user's shell.
+    # The behavior change will not permanently affect user's shell.
     [ "${ZSH_NAME+zsh}" = "zsh" ] && emulate -L sh
 
     # locale is expected to output either:
@@ -53,38 +56,10 @@ locale_warn() {
     printf " This can affect your user experience significantly, including the\n"
     printf " ability to manage packages. You may install the locales by running:\n\n"
 
-    local bad invalid="" to_gen="" sfile="/usr/share/i18n/SUPPORTED"
-    local pkgs=""
-    if [ -e "$sfile" ]; then
-        for bad in ${bad_lcs}; do
-            grep -q -i "${bad}" "$sfile" &&
-                to_gen="${to_gen} ${bad}" ||
-                invalid="${invalid} ${bad}"
-        done
-    else
-        printf "  sudo apt-get install locales\n"
-        to_gen=$bad_lcs
-    fi
-    to_gen=${to_gen# }
-
-    local pkgs=""
-    for bad in ${to_gen}; do
-        pkgs="${pkgs} language-pack-${bad%%_*}"
-    done
-    pkgs=${pkgs# }
-
-    if [ -n "${pkgs}" ]; then
-        printf "   sudo apt-get install ${pkgs# }\n"
-        printf "     or\n"
-        printf "   sudo locale-gen ${to_gen# }\n"
-        printf "\n"
-    fi
-    for bad in ${invalid}; do
-        printf "WARNING: '${bad}' is an invalid locale\n"
-    done
-
-    printf "To see all available language packs, run:\n"
-    printf "   apt-cache search \"^language-pack-[a-z][a-z]$\"\n"
+    printf " sudo dpkg-reconfigure locales\n\n"
+    printf " and select the missing language. Alternatively, you can install the\n"
+    printf " locales-all package:\n\n"
+    printf " sudo apt-get install locales-all\n\n"
     printf "To disable this message for all users, run:\n"
     printf "   sudo touch /var/lib/cloud/instance/locale-check.skip\n"
     printf "_____________________________________________________________________\n\n"
@@ -97,4 +72,3 @@ locale_warn() {
     locale 2>&1 | locale_warn
 
 unset locale_warn
-# vi: ts=4 expandtab

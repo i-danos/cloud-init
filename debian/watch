@@ -1,2 +1,4 @@
-version=3
-https://launchpad.net/cloud-init https://launchpad.net/cloud-init/.*/cloud-init-(.*).tar.gz
+version=4
+opts="filenamemangle=s%(?:.*?)?v?(\d[\d.]*@ARCHIVE_EXT@)%@PACKAGE@-$1%" \
+    https://github.com/canonical/cloud-init/tags \
+    (?:.*?/)?v?[-_]?(\d[\-+\.:\~\d]*)@ARCHIVE_EXT@

@@ -6,42 +6,38 @@
 #
 # This file is part of cloud-init. See LICENSE file for license information.
 
-"""
-Locale
-------
-**Summary:** set system locale
+"""Locale: set system locale"""
 
-Configure the system locale and apply it system wide. By default use the locale
-specified by the datasource.
-
-**Internal name:** ``cc_locale``
-
-**Module frequency:** per instance
-
-**Supported distros:** all
-
-**Config keys**::
-
-    locale: <locale str>
-    locale_configfile: <path to locale config file>
-"""
+import logging
 
 from cloudinit import util
+from cloudinit.cloud import Cloud
+from cloudinit.config import Config
+from cloudinit.config.schema import MetaSchema
+from cloudinit.settings import PER_INSTANCE
+
+meta: MetaSchema = {
+    "id": "cc_locale",
+    "distros": ["all"],
+    "frequency": PER_INSTANCE,
+    "activate_by_schema_keys": [],
+}
+
+LOG = logging.getLogger(__name__)
 
 
-def handle(name, cfg, cloud, log, args):
-    if len(args) != 0:
+def handle(name: str, cfg: Config, cloud: Cloud, args: list) -> None:
+    if args:
         locale = args[0]
     else:
         locale = util.get_cfg_option_str(cfg, "locale", cloud.get_locale())
 
     if util.is_false(locale):
-        log.debug("Skipping module named %s, disabled by config: %s",
-                  name, locale)
+        LOG.debug(
+            "Skipping module named %s, disabled by config: %s", name, locale
+        )
         return
 
-    log.debug("Setting locale to %s", locale)
+    LOG.debug("Setting locale to %s", locale)
     locale_cfgfile = util.get_cfg_option_str(cfg, "locale_configfile")
     cloud.distro.apply_locale(locale, locale_cfgfile)
-
-# vi: ts=4 expandtab

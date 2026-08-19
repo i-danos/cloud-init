@@ -1,5 +1,5 @@
 # This file is part of cloud-init. See LICENSE file for license information.
-"""Datasource for IBMCloud.
+r"""Datasource for IBMCloud.
 
 IBMCloud is also know as SoftLayer or BlueMix.
 IBMCloud hypervisor is xen (2018-03-10).
@@ -83,7 +83,7 @@ creates 6 boot scenarios.
 
     There is no information available to identify this scenario.
 
-    The user will be able to ssh in as as root with their public keys that
+    The user will be able to SSH in as as root with their public keys that
     have been installed into /root/ssh/.authorized_keys
     during the provisioning stage.
 
@@ -94,21 +94,20 @@ TODO:
 """
 import base64
 import json
+import logging
 import os
+from typing import Any, Callable, Dict, Optional, Tuple
 
-from cloudinit import log as logging
-from cloudinit import sources
+from cloudinit import atomic_helper, sources, subp, util
 from cloudinit.sources.helpers import openstack
-from cloudinit import util
 
 LOG = logging.getLogger(__name__)
 
 IBM_CONFIG_UUID = "9796-932E"
 
 
-class Platforms(object):
+class Platforms:
     TEMPLATE_LIVE_METADATA = "Template/Live/Metadata"
-    TEMPLATE_LIVE_NODATA = "UNABLE TO BE IDENTIFIED."
     TEMPLATE_PROVISIONING_METADATA = "Template/Provisioning/Metadata"
     TEMPLATE_PROVISIONING_NODATA = "Template/Provisioning/No-Metadata"
     OS_CODE = "OS-Code/Live"
@@ -116,12 +115,13 @@ class Platforms(object):
 
 PROVISIONING = (
     Platforms.TEMPLATE_PROVISIONING_METADATA,
-    Platforms.TEMPLATE_PROVISIONING_NODATA)
+    Platforms.TEMPLATE_PROVISIONING_NODATA,
+)
 
 
 class DataSourceIBMCloud(sources.DataSource):
 
-    dsname = 'IBMCloud'
+    dsname = "IBMCloud"
     system_uuid = None
 
     def __init__(self, sys_cfg, distro, paths):
@@ -141,14 +141,13 @@ class DataSourceIBMCloud(sources.DataSource):
         if results is None:
             return False
 
-        self.source = results['source']
-        self.platform = results['platform']
-        self.metadata = results['metadata']
-        self.userdata_raw = results.get('userdata')
-        self.network_json = results.get('networkdata')
-        vd = results.get('vendordata')
-        self.vendordata_pure = vd
-        self.system_uuid = results['system-uuid']
+        self.source = results["source"]
+        self.platform = results["platform"]
+        self.metadata = results["metadata"]
+        self.userdata_raw = results.get("userdata")
+        self.network_json = results.get("networkdata")
+        vd = results.get("vendordata")
+        self.system_uuid = results["system-uuid"]
         try:
             self.vendordata_raw = sources.convert_vendordata(vd)
         except ValueError as e:
@@ -156,6 +155,10 @@ class DataSourceIBMCloud(sources.DataSource):
             self.vendordata_raw = None
 
         return True
+
+    def _get_subplatform(self):
+        """Return the subplatform metadata source details."""
+        return "%s (%s)" % (self.platform, self.source)
 
     def check_instance_id(self, sys_cfg):
         """quickly (local check only) if self.instance_id is still valid
@@ -172,45 +175,62 @@ class DataSourceIBMCloud(sources.DataSource):
         if self.platform != Platforms.OS_CODE:
             # If deployed from template, an agent in the provisioning
             # environment handles networking configuration. Not cloud-init.
-            return {'config': 'disabled', 'version': 1}
+            return {"config": "disabled", "version": 1}
         if self._network_config is None:
-            if self.network_json is not None:
+            if self.network_json not in (sources.UNSET, None):
                 LOG.debug("network config provided via network_json")
                 self._network_config = openstack.convert_net_json(
-                    self.network_json, known_macs=None)
+                    self.network_json, known_macs=None
+                )
             else:
                 LOG.debug("no network configuration available.")
         return self._network_config
 
 
-def _read_system_uuid():
+def _read_system_uuid() -> Optional[str]:
+    """
+    Read the system uuid.
+
+    :return: the system uuid or None if not available.
+    """
     uuid_path = "/sys/hypervisor/uuid"
     if not os.path.isfile(uuid_path):
         return None
-    return util.load_file(uuid_path).strip().lower()
+    return util.load_text_file(uuid_path).strip().lower()
 
 
 def _is_xen():
+    """
+    Return boolean indicating if this is a xen hypervisor.
+
+    :return: True if this is a xen hypervisor, False otherwise.
+    """
     return os.path.exists("/proc/xen")
 
 
 def _is_ibm_provisioning(
-        prov_cfg="/root/provisioningConfiguration.cfg",
-        inst_log="/root/swinstall.log",
-        boot_ref="/proc/1/environ"):
+    prov_cfg="/root/provisioningConfiguration.cfg",
+    inst_log="/root/swinstall.log",
+    boot_ref="/proc/1/environ",
+) -> bool:
     """Return boolean indicating if this boot is ibm provisioning boot."""
     if os.path.exists(prov_cfg):
         msg = "config '%s' exists." % prov_cfg
         result = True
         if os.path.exists(inst_log):
             if os.path.exists(boot_ref):
-                result = (os.stat(inst_log).st_mtime >
-                          os.stat(boot_ref).st_mtime)
-                msg += (" log '%s' from %s boot." %
-                        (inst_log, "current" if result else "previous"))
+                result = (
+                    os.stat(inst_log).st_mtime > os.stat(boot_ref).st_mtime
+                )
+                msg += " log '%s' from %s boot." % (
+                    inst_log,
+                    "current" if result else "previous",
+                )
             else:
-                msg += (" log '%s' existed, but no reference file '%s'." %
-                        (inst_log, boot_ref))
+                msg += " log '%s' existed, but no reference file '%s'." % (
+                    inst_log,
+                    boot_ref,
+                )
                 result = False
         else:
             msg += " log '%s' did not exist." % inst_log
@@ -220,7 +240,7 @@ def _is_ibm_provisioning(
     return result
 
 
-def get_ibm_platform():
+def get_ibm_platform() -> Tuple[Optional[str], Optional[str]]:
     """Return a tuple (Platform, path)
 
     If this is Not IBM cloud, then the return value is (None, None).
@@ -233,10 +253,10 @@ def get_ibm_platform():
         return not_found
 
     # fslabels contains only the first entry with a given label.
-    fslabels = {}
+    fslabels: Dict[str, Dict] = {}
     try:
         devs = util.blkid()
-    except util.ProcessExecutionError as e:
+    except subp.ProcessExecutionError as e:
         LOG.warning("Failed to run blkid: %s", e)
         return (None, None)
 
@@ -247,17 +267,26 @@ def get_ibm_platform():
         if label not in (label_mdata, label_cfg2):
             continue
         if label in fslabels:
-            LOG.warning("Duplicate fslabel '%s'. existing=%s current=%s",
-                        label, fslabels[label], data)
+            LOG.warning(
+                "Duplicate fslabel '%s'. existing=%s current=%s",
+                label,
+                fslabels[label],
+                data,
+            )
             continue
         if label == label_cfg2 and uuid != IBM_CONFIG_UUID:
-            LOG.debug("Skipping %s with LABEL=%s due to uuid != %s: %s",
-                      dev, label, uuid, data)
+            LOG.debug(
+                "Skipping %s with LABEL=%s due to uuid != %s: %s",
+                dev,
+                label,
+                uuid,
+                data,
+            )
             continue
         fslabels[label] = data
 
-    metadata_path = fslabels.get(label_mdata, {}).get('DEVNAME')
-    cfg2_path = fslabels.get(label_cfg2, {}).get('DEVNAME')
+    metadata_path = fslabels.get(label_mdata, {}).get("DEVNAME")
+    cfg2_path = fslabels.get(label_cfg2, {}).get("DEVNAME")
 
     if cfg2_path:
         return (Platforms.OS_CODE, cfg2_path)
@@ -271,112 +300,123 @@ def get_ibm_platform():
     return not_found
 
 
-def read_md():
+def read_md() -> Optional[Dict[str, Any]]:
     """Read data from IBM Cloud.
 
-    @return: None if not running on IBM Cloud.
+    :return: None if not running on IBM Cloud.
              dictionary with guaranteed fields: metadata, version
              and optional fields: userdata, vendordata, networkdata.
-             Also includes the system uuid from /sys/hypervisor/uuid."""
+    Also includes the system uuid from /sys/hypervisor/uuid."""
     platform, path = get_ibm_platform()
     if platform is None:
         LOG.debug("This is not an IBMCloud platform.")
         return None
-    elif platform in PROVISIONING:
-        LOG.debug("Cloud-init is disabled during provisioning: %s.",
-                  platform)
+    elif platform in PROVISIONING or path is None:
+        LOG.debug("Cloud-init is disabled during provisioning: %s.", platform)
         return None
 
-    ret = {'platform': platform, 'source': path,
-           'system-uuid': _read_system_uuid()}
+    ret = {
+        "platform": platform,
+        "source": path,
+        "system-uuid": _read_system_uuid(),
+    }
 
     try:
         if os.path.isdir(path):
             results = metadata_from_dir(path)
         else:
             results = util.mount_cb(path, metadata_from_dir)
-    except BrokenMetadata as e:
+    except sources.BrokenMetadata as e:
         raise RuntimeError(
-            "Failed reading IBM config disk (platform=%s path=%s): %s" %
-            (platform, path, e))
+            "Failed reading IBM config disk (platform=%s path=%s): %s"
+            % (platform, path, e)
+        ) from e
 
     ret.update(results)
     return ret
 
 
-class BrokenMetadata(IOError):
-    pass
-
-
-def metadata_from_dir(source_dir):
+def metadata_from_dir(source_dir: str) -> Dict[str, Any]:
     """Walk source_dir extracting standardized metadata.
 
     Certain metadata keys are renamed to present a standardized set of metadata
     keys.
 
     This function has a lot in common with ConfigDriveReader.read_v2 but
-    there are a number of inconsistencies, such key renames and as only
-    presenting a 'latest' version which make it an unlikely candidate to share
+    there are a number of inconsistencies, such as key renames and only
+    presenting a 'latest' version, which make it an unlikely candidate to share
     code.
 
-    @return: Dict containing translated metadata, userdata, vendordata,
+    :return: Dict containing translated metadata, userdata, vendordata,
         networkdata as present.
     """
 
-    def opath(fname):
+    def opath(fname: str) -> str:
         return os.path.join("openstack", "latest", fname)
 
-    def load_json_bytes(blob):
-        return json.loads(blob.decode('utf-8'))
+    def load_json_bytes(blob: bytes) -> Dict[str, Any]:
+        """
+        Load JSON from a byte string.
+
+        This technically could return a list or a str, but we are only
+        assuming a dict here.
+
+        :param blob: The byte string to load JSON from.
+        :return: The loaded JSON object.
+        """
+        return json.loads(blob.decode("utf-8"))
+
+    def load_file(path: str, translator: Callable[[bytes], Any]) -> Any:
+        try:
+            raw = util.load_binary_file(path)
+            return translator(raw)
+        except IOError as e:
+            LOG.debug("Failed reading path '%s': %s", path, e)
+            return None
+        except Exception as e:
+            raise sources.BrokenMetadata(f"Failed decoding {path}: {e}")
 
     files = [
         # tuples of (results_name, path, translator)
-        ('metadata_raw', opath('meta_data.json'), load_json_bytes),
-        ('userdata', opath('user_data'), None),
-        ('vendordata', opath('vendor_data.json'), load_json_bytes),
-        ('networkdata', opath('network_data.json'), load_json_bytes),
+        ("metadata_raw", opath("meta_data.json"), load_json_bytes),
+        ("userdata", opath("user_data"), lambda x: x),
+        ("vendordata", opath("vendor_data.json"), load_json_bytes),
+        ("networkdata", opath("network_data.json"), load_json_bytes),
     ]
 
-    results = {}
-    for (name, path, transl) in files:
+    results: Dict[str, Any] = {}
+
+    for name, path, transl in files:
         fpath = os.path.join(source_dir, path)
-        raw = None
+        results[name] = load_file(fpath, transl)
+
+    if results["metadata_raw"] is None:
+        raise sources.BrokenMetadata(
+            f"{source_dir} missing required file 'meta_data.json'",
+        )
+
+    results["metadata"] = {}
+
+    md_raw = results["metadata_raw"]
+    md = results["metadata"]
+
+    if "random_seed" in md_raw:
         try:
-            raw = util.load_file(fpath, decode=False)
-        except IOError as e:
-            LOG.debug("Failed reading path '%s': %s", fpath, e)
-
-        if raw is None or transl is None:
-            data = raw
-        else:
-            try:
-                data = transl(raw)
-            except Exception as e:
-                raise BrokenMetadata("Failed decoding %s: %s" % (path, e))
-
-        results[name] = data
-
-    if results.get('metadata_raw') is None:
-        raise BrokenMetadata(
-            "%s missing required file 'meta_data.json'" % source_dir)
-
-    results['metadata'] = {}
-
-    md_raw = results['metadata_raw']
-    md = results['metadata']
-    if 'random_seed' in md_raw:
-        try:
-            md['random_seed'] = base64.b64decode(md_raw['random_seed'])
+            md["random_seed"] = base64.b64decode(md_raw["random_seed"])
         except (ValueError, TypeError) as e:
-            raise BrokenMetadata(
-                "Badly formatted metadata random_seed entry: %s" % e)
+            raise sources.BrokenMetadata(
+                f"Badly formatted metadata random_seed entry: {e}"
+            )
 
     renames = (
-        ('public_keys', 'public-keys'), ('hostname', 'local-hostname'),
-        ('uuid', 'instance-id'))
-    for mdname, newname in renames:
-        if mdname in md_raw:
-            md[newname] = md_raw[mdname]
+        ("public_keys", "public-keys"),
+        ("hostname", "local-hostname"),
+        ("uuid", "instance-id"),
+    )
+
+    for old_key, new_key in renames:
+        if old_key in md_raw:
+            md[new_key] = md_raw[old_key]
 
     return results
 
@@ -395,9 +435,7 @@ def get_datasource_list(depends):
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description='Query IBM Cloud Metadata')
+    parser = argparse.ArgumentParser(description="Query IBM Cloud Metadata")
     args = parser.parse_args()
     data = read_md()
-    print(util.json_dumps(data))
-
-# vi: ts=4 expandtab
+    print(atomic_helper.json_dumps(data))
