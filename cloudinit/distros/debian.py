@@ -7,146 +7,164 @@
 # Author: Joshua Harlow <harlowja@yahoo-inc.com>
 #
 # This file is part of cloud-init. See LICENSE file for license information.
-
+import logging
 import os
+from typing import List
 
-from cloudinit import distros
-from cloudinit import helpers
-from cloudinit import log as logging
-from cloudinit import util
-
+from cloudinit import distros, subp, util
+from cloudinit.distros.package_management.apt import Apt
+from cloudinit.distros.package_management.package_manager import PackageManager
 from cloudinit.distros.parsers.hostname import HostnameConf
-
-from cloudinit.settings import PER_INSTANCE
+from cloudinit.net.netplan import CLOUDINIT_NETPLAN_FILE
 
 LOG = logging.getLogger(__name__)
 
-APT_GET_COMMAND = ('apt-get', '--option=Dpkg::Options::=--force-confold',
-                   '--option=Dpkg::options::=--force-unsafe-io',
-                   '--assume-yes', '--quiet')
-APT_GET_WRAPPER = {
-    'command': 'eatmydata',
-    'enabled': 'auto',
-}
-
-ENI_HEADER = """# This file is generated from information provided by
-# the datasource.  Changes to it will not persist across an instance.
-# To disable cloud-init's network configuration capabilities, write a file
+NETWORK_FILE_HEADER = """\
+# This file is generated from information provided by the datasource.  Changes
+# to it will not persist across an instance reboot.  To disable cloud-init's
+# network configuration capabilities, write a file
 # /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg with the following:
 # network: {config: disabled}
 """
 
-NETWORK_CONF_FN = "/etc/network/interfaces.d/50-cloud-init.cfg"
 LOCALE_CONF_FN = "/etc/default/locale"
 
 
 class Distro(distros.Distro):
     hostname_conf_fn = "/etc/hostname"
     network_conf_fn = {
-        "eni": "/etc/network/interfaces.d/50-cloud-init.cfg",
-        "netplan": "/etc/netplan/50-cloud-init.yaml"
+        "eni": "/etc/network/interfaces.d/50-cloud-init",
+        "netplan": CLOUDINIT_NETPLAN_FILE,
     }
     renderer_configs = {
-        "eni": {"eni_path": network_conf_fn["eni"],
-                "eni_header": ENI_HEADER},
-        "netplan": {"netplan_path": network_conf_fn["netplan"],
-                    "netplan_header": ENI_HEADER,
-                    "postcmds": True}
+        "eni": {
+            "eni_path": network_conf_fn["eni"],
+            "eni_header": NETWORK_FILE_HEADER,
+        },
+        "netplan": {
+            "netplan_path": network_conf_fn["netplan"],
+            "netplan_header": NETWORK_FILE_HEADER,
+            "postcmds": True,
+        },
     }
+    # Debian stores dhclient leases at following location:
+    # /var/lib/dhcp/dhclient.<iface_name>.leases
+    dhclient_lease_directory = "/var/lib/dhcp"
+    dhclient_lease_file_regex = r"dhclient\.\w+\.leases"
 
     def __init__(self, name, cfg, paths):
-        distros.Distro.__init__(self, name, cfg, paths)
+        super().__init__(name, cfg, paths)
         # This will be used to restrict certain
-        # calls from repeatly happening (when they
+        # calls from repeatedly happening (when they
         # should only happen say once per instance...)
-        self._runner = helpers.Runners(paths)
-        self.osfamily = 'debian'
-        self.default_locale = 'en_US.UTF-8'
+        self.osfamily = "debian"
+        self.default_locale = "C.UTF-8"
         self.system_locale = None
+        self.apt = Apt.from_config(self._runner, cfg)
+        self.package_managers: List[PackageManager] = [self.apt]
 
     def get_locale(self):
         """Return the default locale if set, else use default locale"""
-
         # read system locale value
         if not self.system_locale:
             self.system_locale = read_system_locale()
 
         # Return system_locale setting if valid, else use default locale
-        return (self.system_locale if self.system_locale else
-                self.default_locale)
+        return (
+            self.system_locale if self.system_locale else self.default_locale
+        )
 
-    def apply_locale(self, locale, out_fn=None, keyname='LANG'):
+    def apply_locale(self, locale, out_fn=None, keyname="LANG"):
         """Apply specified locale to system, regenerate if specified locale
-            differs from system default."""
+        differs from system default."""
         if not out_fn:
             out_fn = LOCALE_CONF_FN
 
         if not locale:
-            raise ValueError('Failed to provide locale value.')
+            raise ValueError("Failed to provide locale value.")
 
         # Only call locale regeneration if needed
         # Update system locale config with specified locale if needed
         distro_locale = self.get_locale()
         conf_fn_exists = os.path.exists(out_fn)
-        sys_locale_unset = False if self.system_locale else True
-        need_regen = (locale.lower() != distro_locale.lower() or
-                      not conf_fn_exists or sys_locale_unset)
+        sys_locale_unset = not self.system_locale
+        if sys_locale_unset:
+            LOG.debug(
+                "System locale not found in %s. "
+                "Assuming system locale is %s based on hardcoded default",
+                LOCALE_CONF_FN,
+                self.default_locale,
+            )
+        else:
+            LOG.debug(
+                "System locale set to %s via %s",
+                self.system_locale,
+                LOCALE_CONF_FN,
+            )
+        need_regen = (
+            locale.lower() != distro_locale.lower()
+            or not conf_fn_exists
+            or sys_locale_unset
+        )
         need_conf = not conf_fn_exists or need_regen or sys_locale_unset
 
         if need_regen:
-            regenerate_locale(locale, out_fn, keyname=keyname)
+            regenerate_locale(
+                locale,
+                out_fn,
+                keyname=keyname,
+                install_function=self.install_packages,
+            )
         else:
             LOG.debug(
                 "System has '%s=%s' requested '%s', skipping regeneration.",
-                keyname, self.system_locale, locale)
+                keyname,
+                self.system_locale,
+                locale,
+            )
 
         if need_conf:
-            update_locale_conf(locale, out_fn, keyname=keyname)
+            update_locale_conf(
+                locale,
+                out_fn,
+                keyname=keyname,
+                install_function=self.install_packages,
+            )
             # once we've updated the system config, invalidate cache
             self.system_locale = None
 
-    def install_packages(self, pkglist):
-        self.update_package_sources()
-        self.package_command('install', pkgs=pkglist)
-
-    def _write_network(self, settings):
-        # this is a legacy method, it will always write eni
-        util.write_file(self.network_conf_fn["eni"], settings)
-        return ['all']
-
-    def _write_network_config(self, netconfig):
+    def _write_network_state(self, *args, **kwargs):
         _maybe_remove_legacy_eth0()
-        return self._supported_write_network_config(netconfig)
+        return super()._write_network_state(*args, **kwargs)
 
-    def _bring_up_interfaces(self, device_names):
-        use_all = False
-        for d in device_names:
-            if d == 'all':
-                use_all = True
-        if use_all:
-            return distros.Distro._bring_up_interface(self, '--all')
-        else:
-            return distros.Distro._bring_up_interfaces(self, device_names)
-
-    def _write_hostname(self, your_hostname, out_fn):
+    def _write_hostname(self, hostname, filename):
         conf = None
         try:
             # Try to update the previous one
             # so lets see if we can read it first.
-            conf = self._read_hostname_conf(out_fn)
+            conf = self._read_hostname_conf(filename)
         except IOError:
-            pass
+            create_hostname_file = util.get_cfg_option_bool(
+                self._cfg, "create_hostname_file", True
+            )
+            if create_hostname_file:
+                pass
+            else:
+                LOG.info(
+                    "create_hostname_file is False; hostname file not created"
+                )
+                return
         if not conf:
-            conf = HostnameConf('')
-        conf.set_hostname(your_hostname)
-        util.write_file(out_fn, str(conf), 0o644)
+            conf = HostnameConf("")
+        conf.set_hostname(hostname)
+        util.write_file(filename, str(conf), 0o644)
 
     def _read_system_hostname(self):
         sys_hostname = self._read_hostname(self.hostname_conf_fn)
         return (self.hostname_conf_fn, sys_hostname)
 
     def _read_hostname_conf(self, filename):
-        conf = HostnameConf(util.load_file(filename))
+        conf = HostnameConf(util.load_text_file(filename))
         conf.parse()
         return conf
 
@@ -169,71 +187,59 @@ class Distro(distros.Distro):
         distros.set_etc_timezone(tz=tz, tz_file=self._find_tz_file(tz))
 
     def package_command(self, command, args=None, pkgs=None):
-        if pkgs is None:
-            pkgs = []
-
-        e = os.environ.copy()
-        # See: http://manpages.ubuntu.com/manpages/xenial/man7/debconf.7.html
-        e['DEBIAN_FRONTEND'] = 'noninteractive'
-
-        wcfg = self.get_option("apt_get_wrapper", APT_GET_WRAPPER)
-        cmd = _get_wrapper_prefix(
-            wcfg.get('command', APT_GET_WRAPPER['command']),
-            wcfg.get('enabled', APT_GET_WRAPPER['enabled']))
-
-        cmd.extend(list(self.get_option("apt_get_command", APT_GET_COMMAND)))
-
-        if args and isinstance(args, str):
-            cmd.append(args)
-        elif args and isinstance(args, list):
-            cmd.extend(args)
-
-        subcmd = command
-        if command == "upgrade":
-            subcmd = self.get_option("apt_get_upgrade_subcommand",
-                                     "dist-upgrade")
-
-        cmd.append(subcmd)
-
-        pkglist = util.expand_package_list('%s=%s', pkgs)
-        cmd.extend(pkglist)
-
-        # Allow the output of this to flow outwards (ie not be captured)
-        util.log_time(logfunc=LOG.debug,
-                      msg="apt-%s [%s]" % (command, ' '.join(cmd)),
-                      func=util.subp,
-                      args=(cmd,), kwargs={'env': e, 'capture': False})
-
-    def update_package_sources(self):
-        self._runner.run("update-sources", self.package_command,
-                         ["update"], freq=PER_INSTANCE)
+        # As of this writing, the only use of `package_command` outside of
+        # distros calling it within their own classes is calling "upgrade"
+        if command != "upgrade":
+            raise RuntimeError(f"Unable to handle {command} command")
+        self.apt.run_package_command("upgrade")
 
     def get_primary_arch(self):
-        (arch, _err) = util.subp(['dpkg', '--print-architecture'])
-        return str(arch).strip()
+        return util.get_dpkg_architecture()
 
+    def set_keymap(self, layout: str, model: str, variant: str, options: str):
+        # localectl is broken on some versions of Debian. See
+        # https://bugs.launchpad.net/ubuntu/+source/systemd/+bug/2030788 and
+        # https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=1038762
+        #
+        # Instead, write the file directly. According to the keyboard(5) man
+        # page, this file is shared between both X and the console.
 
-def _get_wrapper_prefix(cmd, mode):
-    if isinstance(cmd, str):
-        cmd = [str(cmd)]
+        contents = "\n".join(
+            [
+                "# This file was generated by cloud-init",
+                "",
+                f'XKBMODEL="{model}"',
+                f'XKBLAYOUT="{layout}"',
+                f'XKBVARIANT="{variant}"',
+                f'XKBOPTIONS="{options}"',
+                "",
+                'BACKSPACE="guess"',  # This is provided on default installs
+                "",
+            ]
+        )
+        util.write_file(
+            filename="/etc/default/keyboard",
+            content=contents,
+            mode=0o644,
+            omode="w",
+        )
 
-    if (util.is_true(mode) or
-        (str(mode).lower() == "auto" and cmd[0] and
-         util.which(cmd[0]))):
-        return cmd
-    else:
-        return []
+        # Due to
+        # https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=926037
+        # if localectl can be used in the future, this line may still
+        # be needed
+        self.manage_service("restart", "console-setup")
 
 
 def _maybe_remove_legacy_eth0(path="/etc/network/interfaces.d/eth0.cfg"):
     """Ubuntu cloud images previously included a 'eth0.cfg' that had
-       hard coded content.  That file would interfere with the rendered
-       configuration if it was present.
+    hard coded content.  That file would interfere with the rendered
+    configuration if it was present.
 
-       if the file does not exist do nothing.
-       If the file exists:
-         - with known content, remove it and warn
-         - with unknown content, leave it and warn
+    if the file does not exist do nothing.
+    If the file exists:
+      - with known content, remove it and warn
+      - with unknown content, leave it and warn
     """
 
     if not os.path.exists(path):
@@ -241,45 +247,56 @@ def _maybe_remove_legacy_eth0(path="/etc/network/interfaces.d/eth0.cfg"):
 
     bmsg = "Dynamic networking config may not apply."
     try:
-        contents = util.load_file(path)
+        contents = util.load_text_file(path)
         known_contents = ["auto eth0", "iface eth0 inet dhcp"]
-        lines = [f.strip() for f in contents.splitlines()
-                 if not f.startswith("#")]
+        lines = [
+            f.strip() for f in contents.splitlines() if not f.startswith("#")
+        ]
         if lines == known_contents:
             util.del_file(path)
             msg = "removed %s with known contents" % path
         else:
-            msg = (bmsg + " '%s' exists with user configured content." % path)
+            msg = bmsg + " '%s' exists with user configured content." % path
     except Exception:
         msg = bmsg + " %s exists, but could not be read." % path
 
     LOG.warning(msg)
 
 
-def read_system_locale(sys_path=LOCALE_CONF_FN, keyname='LANG'):
+def read_system_locale(sys_path=LOCALE_CONF_FN, keyname="LANG"):
     """Read system default locale setting, if present"""
     sys_val = ""
     if not sys_path:
-        raise ValueError('Invalid path: %s' % sys_path)
+        raise ValueError("Invalid path: %s" % sys_path)
 
     if os.path.exists(sys_path):
-        locale_content = util.load_file(sys_path)
+        locale_content = util.load_text_file(sys_path)
         sys_defaults = util.load_shell_content(locale_content)
         sys_val = sys_defaults.get(keyname, "")
 
     return sys_val
 
 
-def update_locale_conf(locale, sys_path, keyname='LANG'):
+def update_locale_conf(
+    locale, sys_path, keyname="LANG", install_function=None
+):
     """Update system locale config"""
-    LOG.debug('Updating %s with locale setting %s=%s',
-              sys_path, keyname, locale)
-    util.subp(
-        ['update-locale', '--locale-file=' + sys_path,
-         '%s=%s' % (keyname, locale)], capture=False)
+    LOG.debug(
+        "Updating %s with locale setting %s=%s", sys_path, keyname, locale
+    )
+    if not subp.which("update-locale"):
+        install_function(["locales"])
+    subp.subp(
+        [
+            "update-locale",
+            "--locale-file=" + sys_path,
+            "%s=%s" % (keyname, locale),
+        ],
+        capture=False,
+    )
 
 
-def regenerate_locale(locale, sys_path, keyname='LANG'):
+def regenerate_locale(locale, sys_path, keyname="LANG", install_function=None):
     """
     Run locale-gen for the provided locale and set the default
     system variable `keyname` appropriately in the provided `sys_path`.
@@ -290,13 +307,12 @@ def regenerate_locale(locale, sys_path, keyname='LANG'):
     # C
     # C.UTF-8
     # POSIX
-    if locale.lower() in ['c', 'c.utf-8', 'posix']:
-        LOG.debug('%s=%s does not require rengeneration', keyname, locale)
+    if locale.lower() in ["c", "c.utf-8", "posix"]:
+        LOG.debug("%s=%s does not require rengeneration", keyname, locale)
         return
 
     # finally, trigger regeneration
-    LOG.debug('Generating locales for %s', locale)
-    util.subp(['locale-gen', locale], capture=False)
-
-
-# vi: ts=4 expandtab
+    if not subp.which("locale-gen"):
+        install_function(["locales"])
+    LOG.debug("Generating locales for %s", locale)
+    subp.subp(["locale-gen", locale], capture=False)

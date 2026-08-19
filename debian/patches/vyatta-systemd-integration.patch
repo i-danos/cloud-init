@@ -1,0 +1,71 @@
+Index: cloud-init-25.1.4/systemd/cloud-config.service
+===================================================================
+--- cloud-init-25.1.4.orig/systemd/cloud-config.service
++++ cloud-init-25.1.4/systemd/cloud-config.service
+@@ -1,8 +1,9 @@
+ [Unit]
+ # https://docs.cloud-init.io/en/latest/explanation/boot.html
+ Description=Cloud-init: Config Stage
+-After=network-online.target cloud-config.target
++After=network-online.target cloud-config.target config-loaded.target
+ Wants=network-online.target cloud-config.target
++ConditionKernelCommandLine=cloud-init
+ ConditionPathExists=!/etc/cloud/cloud-init.disabled
+ ConditionKernelCommandLine=!cloud-init=disabled
+ ConditionEnvironment=!KERNEL_CMDLINE=cloud-init=disabled
+Index: cloud-init-25.1.4/systemd/cloud-final.service
+===================================================================
+--- cloud-init-25.1.4.orig/systemd/cloud-final.service
++++ cloud-init-25.1.4/systemd/cloud-final.service
+@@ -5,6 +5,7 @@ After=network-online.target time-sync.ta
+ After=multi-user.target
+ Before=apt-daily.service
+ Wants=network-online.target cloud-config.service
++ConditionKernelCommandLine=cloud-init
+ ConditionPathExists=!/etc/cloud/cloud-init.disabled
+ ConditionKernelCommandLine=!cloud-init=disabled
+ ConditionEnvironment=!KERNEL_CMDLINE=cloud-init=disabled
+Index: cloud-init-25.1.4/systemd/cloud-init-local.service.tmpl
+===================================================================
+--- cloud-init-25.1.4.orig/systemd/cloud-init-local.service.tmpl
++++ cloud-init-25.1.4/systemd/cloud-init-local.service.tmpl
+@@ -16,6 +16,7 @@ Before=firewalld.target
+ Before=sysinit.target
+ {% endif %}
+ Conflicts=shutdown.target
++ConditionKernelCommandLine=cloud-init
+ ConditionPathExists=!/etc/cloud/cloud-init.disabled
+ ConditionKernelCommandLine=!cloud-init=disabled
+ ConditionEnvironment=!KERNEL_CMDLINE=cloud-init=disabled
+Index: cloud-init-25.1.4/systemd/cloud-init-main.service.tmpl
+===================================================================
+--- cloud-init-25.1.4.orig/systemd/cloud-init-main.service.tmpl
++++ cloud-init-25.1.4/systemd/cloud-init-main.service.tmpl
+@@ -21,6 +21,7 @@ Before=cloud-init-local.service
+ Before=shutdown.target
+ Conflicts=shutdown.target
+ RequiresMountsFor=/var/lib/cloud
++ConditionKernelCommandLine=cloud-init
+ ConditionPathExists=!/etc/cloud/cloud-init.disabled
+ ConditionKernelCommandLine=!cloud-init=disabled
+ ConditionEnvironment=!KERNEL_CMDLINE=cloud-init=disabled
+Index: cloud-init-25.1.4/systemd/cloud-init-network.service.tmpl
+===================================================================
+--- cloud-init-25.1.4.orig/systemd/cloud-init-network.service.tmpl
++++ cloud-init-25.1.4/systemd/cloud-init-network.service.tmpl
+@@ -29,6 +29,7 @@ After=dbus.service
+ {% endif %}
+ Before=network-online.target
+ Before=chronyd.service
++Before=vyatta-dataplane.service
+ Before=sshd-keygen.service
+ Before=sshd.service
+ Before=systemd-user-sessions.service
+@@ -41,6 +42,7 @@ Conflicts=shutdown.target
+ Before=shutdown.target
+ Conflicts=shutdown.target
+ {% endif %}
++ConditionKernelCommandLine=cloud-init
+ ConditionPathExists=!/etc/cloud/cloud-init.disabled
+ ConditionKernelCommandLine=!cloud-init=disabled
+ ConditionEnvironment=!KERNEL_CMDLINE=cloud-init=disabled

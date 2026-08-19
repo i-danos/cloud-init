@@ -8,15 +8,15 @@
 
 """Runcmd: run arbitrary commands at rc.local with output to the console"""
 
-from cloudinit.config.schema import (
-    get_schema_doc, validate_cloudconfig_schema)
+import logging
+import os
+
+from cloudinit import util
+from cloudinit.cloud import Cloud
+from cloudinit.config import Config
+from cloudinit.config.schema import MetaSchema
 from cloudinit.distros import ALL_DISTROS
 from cloudinit.settings import PER_INSTANCE
-from cloudinit import util
-
-import os
-from textwrap import dedent
-
 
 # The schema definition for each cloud-config module is a strict contract for
 # describing supported configuration parameters for each cloud-config section.
@@ -24,68 +24,27 @@ from textwrap import dedent
 # configuration options before actually attempting to deploy with said
 # configuration.
 
-distros = [ALL_DISTROS]
-
-schema = {
-    'id': 'cc_runcmd',
-    'name': 'Runcmd',
-    'title': 'Run arbitrary commands',
-    'description': dedent("""\
-        Run arbitrary commands at a rc.local like level with output to the
-        console. Each item can be either a list or a string. If the item is a
-        list, it will be properly executed as if passed to ``execve()`` (with
-        the first arg as the command). If the item is a string, it will be
-        written to a file and interpreted
-        using ``sh``.
-
-        .. note::
-
-          all commands must be proper yaml, so you have to quote any characters
-          yaml would eat (':' can be problematic)
-    """),
-    'distros': distros,
-    'examples': [dedent("""\
-        runcmd:
-            - [ ls, -l, / ]
-            - [ sh, -xc, "echo $(date) ': hello world!'" ]
-            - [ sh, -c, echo "=========hello world'=========" ]
-            - ls -l /root
-            - [ wget, "http://example.org", -O, /tmp/index.html ]
-    """)],
-    'frequency': PER_INSTANCE,
-    'type': 'object',
-    'properties': {
-        'runcmd': {
-            'type': 'array',
-            'items': {
-                'oneOf': [
-                    {'type': 'array', 'items': {'type': 'string'}},
-                    {'type': 'string'}]
-            },
-            'additionalItems': False,  # Reject items of non-string non-list
-            'additionalProperties': False,
-            'minItems': 1,
-            'required': [],
-        }
-    }
+meta: MetaSchema = {
+    "id": "cc_runcmd",
+    "distros": [ALL_DISTROS],
+    "frequency": PER_INSTANCE,
+    "activate_by_schema_keys": ["runcmd"],
 }
 
-__doc__ = get_schema_doc(schema)  # Supplement python help()
+LOG = logging.getLogger(__name__)
 
 
-def handle(name, cfg, cloud, log, _args):
+def handle(name: str, cfg: Config, cloud: Cloud, args: list) -> None:
     if "runcmd" not in cfg:
-        log.debug(("Skipping module named %s,"
-                   " no 'runcmd' key in configuration"), name)
+        LOG.debug(
+            "Skipping module named %s, no 'runcmd' key in configuration", name
+        )
         return
 
-    validate_cloudconfig_schema(cfg, schema)
-    out_fn = os.path.join(cloud.get_ipath('scripts'), "runcmd")
+    out_fn = os.path.join(cloud.get_ipath("scripts"), "runcmd")
     cmd = cfg["runcmd"]
     try:
         content = util.shellify(cmd)
         util.write_file(out_fn, content, 0o700)
-    except Exception:
-        util.logexc(log, "Failed to shellify %s into file %s", cmd, out_fn)
-
-# vi: ts=4 expandtab
+    except Exception as e:
+        raise type(e)("Failed to shellify {} into file {}".format(cmd, out_fn))

@@ -1,4 +1,6 @@
-#!/bin/sh -e
+#!/bin/sh
+
+set -e
 
 . /usr/share/debconf/confmodule
 
@@ -9,13 +11,13 @@ update_cfg() {
    # takes filename, header, new object (in yaml), optionally 'remover'
    # and merges new into existing object in filename, and then updates file
    # remover a string that means "delete existing entry"
-   python -c '
+   python3 -c '
 import sys, yaml
 
 def update(src, cand):
     if not (isinstance(src, dict) and isinstance(cand, dict)):
         return cand
-    for k, v in cand.iteritems():
+    for k, v in cand.items():
         # if the candidate has _ as value, delete source
         if v == REMOVER:
             if k in src:
@@ -31,10 +33,10 @@ def update(src, cand):
 REMOVER = object
 if len(sys.argv) == 5:
    REMOVER = sys.argv[4]
-newcfg = yaml.load(newyaml)
+newcfg = yaml.safe_load(newyaml)
 
 with open(fname, "r") as fp:
-    cfg = yaml.load(fp)
+    cfg = yaml.safe_load(fp)
 if not cfg: cfg = {}
 
 cfg = update(cfg, newcfg)
@@ -56,7 +58,11 @@ handle_preseed_maas() {
 
    # change a url query string format into : delimited
    if [ -n "$creds_all" -a "${creds_all#*&}" != "${creds_all}" ]; then
-      creds_all=$(python -c 'from urlparse import parse_qs; import sys;
+      # the command here ends up looking like:
+      # python3 -c '...' 'oauth_consumer_key=v1&oauth_token_key=v2...' \
+      #   oauth_consumer_key oauth_token_key oauth_token_secret
+      creds_all=$(python3 -c 'from six.moves.urllib.parse import parse_qs;
+import sys;
 keys = parse_qs(sys.argv[1])
 for k in sys.argv[2:]:
    sys.stdout.write("%s:" % keys.get(k,[""])[0])' "$creds_all" \

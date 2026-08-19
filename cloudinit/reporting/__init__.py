@@ -9,16 +9,18 @@ The reporting framework is intended to allow all parts of cloud-init to
 report events in a structured manner.
 """
 
-from ..registry import DictRegistry
-from .handlers import available_handlers
+from typing import Type
+
+from cloudinit.registry import DictRegistry
+from cloudinit.reporting.handlers import HandlerType, available_handlers
 
 DEFAULT_CONFIG = {
-    'logging': {'type': 'log'},
+    "logging": {"type": "log"},
 }
 
 
 def update_configuration(config):
-    """Update the instanciated_handler_registry.
+    """Update the instantiated_handler_registry.
 
     :param config:
         The dictionary containing changes to apply.  If a key is given
@@ -28,16 +30,23 @@ def update_configuration(config):
     for handler_name, handler_config in config.items():
         if not handler_config:
             instantiated_handler_registry.unregister_item(
-                handler_name, force=True)
+                handler_name, force=True
+            )
             continue
         handler_config = handler_config.copy()
-        cls = available_handlers.registered_items[handler_config.pop('type')]
+        cls: Type[HandlerType] = available_handlers.registered_items[
+            handler_config.pop("type")
+        ]
         instantiated_handler_registry.unregister_item(handler_name)
-        instance = cls(**handler_config)
+        instance = cls(**handler_config)  # pyright: ignore
         instantiated_handler_registry.register_item(handler_name, instance)
+
+
+def flush_events():
+    handler: HandlerType
+    for handler in instantiated_handler_registry.registered_items.values():
+        handler.flush()
 
 
 instantiated_handler_registry = DictRegistry()
 update_configuration(DEFAULT_CONFIG)
-
-# vi: ts=4 expandtab

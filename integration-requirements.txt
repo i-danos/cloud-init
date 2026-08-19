@@ -1,20 +1,15 @@
+-r requirements.txt
 # PyPI requirements for cloud-init integration testing
-# https://cloudinit.readthedocs.io/en/latest/topics/tests.html
+# https://docs.cloud-init.io/en/latest/development/integration_tests.html
 #
-# Note: Changes to this requirements may require updates to
-# the packages/pkg-deps.json file as well.
-#
+pycloudlib>=1!10.0.2,<1!11
 
-# ec2 backend
-boto3==1.5.9
+# Avoid breaking change in `testpaths` treatment forced
+# test/unittests/conftest.py to be loaded by our integration-tests tox env
+# resulting in an unmet dependency issue:
+# https://github.com/pytest-dev/pytest/issues/11104
+pytest!=7.3.2
 
-# ssh communication
-paramiko==2.4.0
-
-# lxd backend
-# 04/03/2018: enables use of lxd 3.0
-git+https://github.com/lxc/pylxd.git@4b8ab1802f9aee4eb29cf7b119dae0aa47150779
-
-
-# finds latest image information
-bzr+lp:simplestreams
+packaging
+passlib
+coverage==7.2.7  # Last version supported in Python 3.7

@@ -9,32 +9,56 @@
 #
 # This file is part of cloud-init. See LICENSE file for license information.
 
-from cloudinit.distros import debian
-from cloudinit.distros import PREFERRED_NTP_CLIENTS
-from cloudinit import log as logging
-from cloudinit import util
-
 import copy
+import logging
+
+from cloudinit.distros import PREFERRED_NTP_CLIENTS, debian
+from cloudinit.distros.package_management.snap import Snap
+from cloudinit.net import activators
+from cloudinit.net.netplan import CLOUDINIT_NETPLAN_FILE
 
 LOG = logging.getLogger(__name__)
 
 
 class Distro(debian.Distro):
+    def __init__(self, name, cfg, paths):
+        super().__init__(name, cfg, paths)
+        # Ubuntu specific network cfg locations
+        self.network_conf_fn = {
+            "eni": "/etc/network/interfaces.d/50-cloud-init.cfg",
+            "netplan": CLOUDINIT_NETPLAN_FILE,
+        }
+        self.renderer_configs = {
+            "eni": {
+                "eni_path": self.network_conf_fn["eni"],
+                "eni_header": debian.NETWORK_FILE_HEADER,
+            },
+            "netplan": {
+                "netplan_path": self.network_conf_fn["netplan"],
+                "netplan_header": debian.NETWORK_FILE_HEADER,
+                "postcmds": True,
+            },
+        }
+        self.snap = Snap(self._runner)
+        self.package_managers.append(self.snap)
+
+    def package_command(self, command, args=None, pkgs=None):
+        super().package_command(command, args, pkgs)
+        if self.snap.available():
+            self.snap.upgrade_packages()
 
     @property
     def preferred_ntp_clients(self):
         """The preferred ntp client is dependent on the version."""
         if not self._preferred_ntp_clients:
-            (_name, _version, codename) = util.system_info()['dist']
-            # Xenial cloud-init only installed ntp, UbuntuCore has timesyncd.
-            if codename == "xenial" and not util.system_is_snappy():
-                self._preferred_ntp_clients = ['ntp']
-            else:
-                self._preferred_ntp_clients = (
-                    copy.deepcopy(PREFERRED_NTP_CLIENTS))
+            self._preferred_ntp_clients = copy.deepcopy(PREFERRED_NTP_CLIENTS)
         return self._preferred_ntp_clients
 
-    pass
-
-
-# vi: ts=4 expandtab
+    def wait_for_network(self) -> None:
+        """Ensure that cloud-init's network service has network connectivity"""
+        try:
+            self.network_activator.wait_for_network()
+        except activators.NoActivatorException:
+            LOG.error("Failed to wait for network. No network activator found")
+        except Exception as e:
+            LOG.error("Failed to wait for network: %s", e)
