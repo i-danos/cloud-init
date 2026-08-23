@@ -62,6 +62,12 @@ ALL_DISTROS = "all"
 
 OSFAMILIES = {
     "alpine": ["alpine"],
+    # DANOS ships cloudinit/distros/vrouter.py and cloud.cfg selects it via
+    # "distro: vrouter". Registering the family here keeps expand_osfamily()
+    # usable for it and satisfies the meta check in
+    # tests/unittests/config/test_schema.py::TestMeta, which asserts every
+    # module's declared distros are known.
+    "vrouter": ["vrouter"],
     "aosc": ["aosc"],
     "arch": ["arch"],
     "debian": ["debian", "ubuntu"],
