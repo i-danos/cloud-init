@@ -725,7 +725,7 @@ class TestShellify(CiTestCase):
         self.assertEqual(
             "\n".join(
                 [
-                    "#!/bin/sh",
+                    "#!/bin/vcli -f",
                     "echo hi mom",
                     "'echo' 'hi dad'",
                     "'echo' 'hi' 'sis'",
@@ -739,7 +739,7 @@ class TestShellify(CiTestCase):
 
     def test_supports_comments(self):
         self.assertEqual(
-            "\n".join(["#!/bin/sh", "echo start", "echo end", ""]),
+            "\n".join(["#!/bin/vcli -f", "echo start", "echo end", ""]),
             util.shellify(["echo start", None, "echo end"]),
         )
 
