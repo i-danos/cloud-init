@@ -77,7 +77,7 @@ class TestRuncmd(FilesystemMockingTestCase):
             "var/lib/cloud/instances/iid-datasource-none/scripts/runcmd",
         )
         self.assertEqual(
-            "#!/bin/sh\n'ls' '/'\n", util.load_text_file(runcmd_file)
+            "#!/bin/vcli -f\n'ls' '/'\n", util.load_text_file(runcmd_file)
         )
         file_stat = os.stat(runcmd_file)
         self.assertEqual(0o700, stat.S_IMODE(file_stat.st_mode))
