@@ -369,7 +369,11 @@ def runparts(dirp, skip_no_exist=True, exe_prefix=None):
             attempted.append(exe_path)
             try:
                 with signal_handler.suspend_crash():
-                    subp(["/bin/vcli", "-f", exe_path], capture=False)
+                    if os.path.exists("/bin/vcli"):
+                        cmd = ["/bin/vcli", "-f", exe_path]
+                    else:
+                        cmd = prefix + [exe_path]
+                    subp(cmd, capture=False)
             except ProcessExecutionError as e:
                 LOG.debug(e)
                 failed.append(exe_name)
