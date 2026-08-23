@@ -18,6 +18,7 @@ Build-Depends:
  python3-all,
  python3-pycodestyle,
  python3-setuptools,
+ python3-vyatta-cfgclient,
  systemd-dev | systemd,
 Build-Depends-Indep:
  python3-configobj,
