@@ -1,3 +1,33 @@
+cloud-init (25.1.4-1+deb13u1vyatta2) unstable; urgency=medium
+
+  * Finish the 25.1.4 API adaptation the rebase left incomplete.
+
+    Acceptance testing on a booted image with a NoCloud seed showed seven
+    modules failing. Restoring "distro: vrouter" and the module run list got
+    apply-network-vyatta and ssh_vyatta scheduled, but they then failed on
+    invocation, and four separate gaps were behind the seven failures:
+
+    - cc_ssh_vyatta.handle() and cc_apply_network_vyatta.handle() kept the
+      18.3 parameter names (_name, _args). 25.1.4 calls modules with keyword
+      arguments, so both raised
+        TypeError: handle() got an unexpected keyword argument 'args'
+
+    - distros/vrouter.py called self._dist_uses_systemd(), removed from the
+      base Distro class upstream. Every module reaching apply_locale() or
+      set_timezone() died with
+        AttributeError: 'Distro' object has no attribute '_dist_uses_systemd'
+      which is what broke locale, set_hostname, update_hostname and
+      users-groups. The replacement is the module-level distros.uses_systemd().
+
+    - debian/cloud.cfg's default_user was still the upstream template's
+      "debian", the third thing the rebase regenerated away (after distro:
+      and the module list). DANOS creates tmpuser from
+      /opt/vyatta/etc/config.boot.default, so cc_ssh_authkey_fingerprints hit
+        KeyError: "getpwnam(): name not found: 'debian'"
+      The netdev group, present in 18.3-5vyatta9, was restored with it.
+
+ -- i-danos <miwide20190328@gmail.com>  Mon, 24 Aug 2026 11:56:45 +0800
+
 cloud-init (25.1.4-1+deb13u1vyatta1) unstable; urgency=medium
 
   * Rebase the DANOS integration onto Debian 13's cloud-init 25.1.4.

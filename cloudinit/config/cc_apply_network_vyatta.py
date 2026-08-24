@@ -66,7 +66,7 @@ def parse_network_interfaces(contents):
                 current_interface['gateway'] = tokens[1]
     return network_interfaces
 
-def handle(name: str, cfg: Config, cloud: Cloud, _args: list) -> None:
+def handle(name: str, cfg: Config, cloud: Cloud, args: list) -> None:
     metadata = cloud.datasource.metadata
     if not metadata or not 'network-interfaces' in metadata:
         return

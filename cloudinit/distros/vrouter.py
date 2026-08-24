@@ -220,7 +220,7 @@ class Distro(distros.Distro):
 
     def apply_locale(self, locale, out_fn=None):
         if not out_fn:
-            if self._dist_uses_systemd():
+            if distros.uses_systemd():
                 out_fn = self.systemd_locale_conf_fn
             else:
                 out_fn = self.locale_conf_fn
@@ -237,7 +237,7 @@ class Distro(distros.Distro):
     def set_timezone(self, tz):
         tz_file = self._find_tz_file(tz)
         # FIXME: Write TZ to config.boot "set system time-zone"
-        if self._dist_uses_systemd():
+        if distros.uses_systemd():
             # Currently, timedatectl complains if invoked during startup
             # so for compatibility, create the link manually.
             util.del_file(self.tz_local_fn)
