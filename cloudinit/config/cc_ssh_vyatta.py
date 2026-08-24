@@ -62,7 +62,7 @@ KEY_2_FILE = {
     "ecdsa_public": ("/etc/ssh/ssh_host_ecdsa_key.pub", 0o644),
 }
 
-def handle(_name: str, cfg: Config, cloud: Cloud, _args: list) -> None:
+def handle(name: str, cfg: Config, cloud: Cloud, args: list) -> None:
 
     # remove the static keys from the pristine image
     if cfg.get("ssh_deletekeys", True):
