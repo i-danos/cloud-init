@@ -1,3 +1,28 @@
+cloud-init (25.1.4-1+deb13u1vyatta3) unstable; urgency=medium
+
+  * Run the configd-dependent modules in the final stage, not the init stage.
+
+    Booting with a datasource attached hung before the login prompt. systemd
+    named it plainly with log_level=debug:
+
+      sysinit.target: starting held back, waiting for: cloud-init-network.service
+
+    cloud-init 25.x added cloud-init-network.service, which blocks sysinit.target
+    until the network stage completes. The network stage runs cloud_init_modules,
+    where apply-network-vyatta and ssh_vyatta were listed; both talk to configd,
+    which systemd starts at multi-user.target -- after sysinit.target. So the
+    modules waited for configd, configd waited for sysinit.target, and
+    sysinit.target waited for the modules.
+
+    18.3 had no such handshake, so the same placement worked there. The final
+    stage runs After=multi-user.target, where configd is available.
+
+    Safe for sshd: Debian's sshd-keygen.service is Before= and WantedBy=
+    ssh.service and runs "ssh-keygen -A", so host keys exist before sshd starts.
+    ssh_vyatta replaces them once afterwards, being PER_INSTANCE.
+
+ -- i-danos <miwide20190328@gmail.com>  Thu, 27 Aug 2026 00:21:14 +0800
+
 cloud-init (25.1.4-1+deb13u1vyatta2) unstable; urgency=medium
 
   * Finish the 25.1.4 API adaptation the rebase left incomplete.
