@@ -1,3 +1,25 @@
+cloud-init (25.1.4-1+deb13u1vyatta4) unstable; urgency=medium
+
+  * Put all four configd-dependent modules back in the config stage.
+
+    vyatta3 moved apply-network-vyatta and ssh_vyatta to the final stage, which
+    cleared the boot deadlock but left set_hostname and update_hostname behind in
+    the init stage. Those two do not hang -- they fail with "failed to connect to
+    configd" -- so the hostname from the datasource was silently discarded: a
+    seed asking for danos-ci-test still booted as "node".
+
+    The vrouter distro sets the hostname through configd as "system host-name"
+    and leaves _write_hostname a no-op, so nothing writes /etc/hostname as a
+    fallback.
+
+    18.3-5vyatta9 had all four in cloud_config_modules. cloud-config.service is
+    ordered After=config-loaded.target, which system-configure.service reaches
+    once the configuration is loaded, so configd is available there. Restoring
+    that placement fixes both symptoms with one change and matches what the
+    integration was written against.
+
+ -- i-danos <miwide20190328@gmail.com>  Thu, 27 Aug 2026 09:34:13 +0800
+
 cloud-init (25.1.4-1+deb13u1vyatta3) unstable; urgency=medium
 
   * Run the configd-dependent modules in the final stage, not the init stage.
